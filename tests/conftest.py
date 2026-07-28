@@ -180,6 +180,34 @@ def make_research_instrument() -> Callable[..., Instrument]:
 
 
 @pytest.fixture
+def make_bar_frame() -> Callable[..., pl.DataFrame]:
+    """Factory produisant des barres OHLCV horaires continues à partir d'une liste de clôtures.
+
+    `open[i] = close[i-1]` (série sans gap) : les tests de backtest qui ont
+    besoin de fills prévisibles au centime près construisent leurs clôtures
+    à la main plutôt que de dépendre d'un générateur aléatoire.
+    """
+
+    def _make(
+        closes: list[float],
+        *,
+        start: datetime = datetime(2024, 1, 1, tzinfo=UTC),
+        wick: float = 0.01,
+    ) -> pl.DataFrame:
+        rows = []
+        for i, close in enumerate(closes):
+            open_ = closes[i - 1] if i > 0 else close
+            high = max(open_, close) + wick
+            low = min(open_, close) - wick
+            rows.append((start + timedelta(hours=i), open_, high, low, close, 100.0))
+        return pl.DataFrame(
+            rows, schema=["timestamp", "open", "high", "low", "close", "volume"], orient="row"
+        )
+
+    return _make
+
+
+@pytest.fixture
 def make_hypothesis() -> Callable[..., HypothesisSheet]:
     """Factory produisant une `HypothesisSheet` (I2) valide, personnalisable via overrides."""
 
