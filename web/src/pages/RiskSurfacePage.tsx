@@ -221,7 +221,8 @@ function RiskSurfaceChartAndStats({
   const kellyOutOfSweep = result.kelly_fraction > maxPointRisk
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-6">
+      <div className="flex flex-col gap-4">
       <div style={{ width: "100%", height: 360 }}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={result.points} margin={{ top: 24, right: 24, bottom: 8, left: 8 }}>
@@ -312,44 +313,50 @@ function RiskSurfaceChartAndStats({
           pour montrer.
         </p>
       ) : null}
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 border-t border-border pt-4">
-        <StatCell label="Optimum réel — risque/trade" value={formatPct(best.risk_per_trade_pct, 2)} />
-        <StatCell label="Optimum réel — P(passage)" value={formatPct(best.p_pass, 1)} />
-        <StatCell label="Critère de Kelly (naïf)" value={formatPct(result.kelly_fraction, 1)} />
-        <StatCell
-          label="Optimum / Kelly"
-          value={`${formatNumber((best.risk_per_trade_pct / result.kelly_fraction) * 100, 1)} %`}
-        />
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border">
-              <th className="py-1.5 pr-4 font-medium">risque par trade</th>
-              <th className="py-1.5 pr-4 font-medium">P(passage)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.points.map((point) => {
-              const isBest = point === best
-              return (
-                <tr
-                  key={point.risk_per_trade_pct}
-                  className={
-                    isBest
-                      ? "border-l-2 border-foreground bg-secondary/50"
-                      : "border-l-2 border-transparent"
-                  }
-                >
-                  <td className="num py-1 pr-4 pl-2">{formatPct(point.risk_per_trade_pct, 2)}</td>
-                  <td className="num py-1 pr-4">{formatPct(point.p_pass, 2)}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+      {/* Colonne de droite : les chiffres exacts à côté de la forme de la
+          courbe, pour tout voir d'un coup d'œil plutôt que de défiler
+          jusqu'au tableau sous le graphique. */}
+      <div className="flex flex-col gap-4 lg:border-l lg:border-border lg:pl-6">
+        <div className="grid grid-cols-2 gap-4">
+          <StatCell label="Optimum réel — risque/trade" value={formatPct(best.risk_per_trade_pct, 2)} />
+          <StatCell label="Optimum réel — P(passage)" value={formatPct(best.p_pass, 1)} />
+          <StatCell label="Critère de Kelly (naïf)" value={formatPct(result.kelly_fraction, 1)} />
+          <StatCell
+            label="Optimum / Kelly"
+            value={`${formatNumber((best.risk_per_trade_pct / result.kelly_fraction) * 100, 1)} %`}
+          />
+        </div>
+
+        <div className="overflow-x-auto max-h-80 overflow-y-auto border-t border-border pt-2">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border">
+                <th className="py-1.5 pr-4 font-medium">risque par trade</th>
+                <th className="py-1.5 pr-4 font-medium">P(passage)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.points.map((point) => {
+                const isBest = point === best
+                return (
+                  <tr
+                    key={point.risk_per_trade_pct}
+                    className={
+                      isBest
+                        ? "border-l-2 border-foreground bg-secondary/50"
+                        : "border-l-2 border-transparent"
+                    }
+                  >
+                    <td className="num py-1 pr-4 pl-2">{formatPct(point.risk_per_trade_pct, 2)}</td>
+                    <td className="num py-1 pr-4">{formatPct(point.p_pass, 2)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )

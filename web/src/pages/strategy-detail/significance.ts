@@ -24,3 +24,12 @@ export function isRobustDsr(deflatedSharpeRatio: number): boolean {
 export function isLowPbo(probabilityOfOverfitting: number): boolean {
   return probabilityOfOverfitting <= 0.1
 }
+
+/**
+ * Une probabilité de breach (I5) matérielle mérite le rouge — pas la couleur
+ * signal, réservée à la significativité statistique. Seuil conservateur :
+ * en dessous, un chiffre non nul reste un artefact Monte Carlo attendu.
+ */
+export function isMaterialBreachRisk(probability: number): boolean {
+  return probability >= 0.05
+}

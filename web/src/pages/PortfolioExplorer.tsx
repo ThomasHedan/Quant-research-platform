@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type {
   AllocationSearchResult,
@@ -314,7 +315,10 @@ export function PortfolioExplorer() {
               {strategies?.map((row) => (
                 <label
                   key={row.strategy_id}
-                  className="flex cursor-pointer items-start gap-2 rounded-sm py-1.5 focus-within:outline focus-within:outline-2 focus-within:outline-signal"
+                  className={cn(
+                    "flex cursor-pointer items-start gap-2 rounded-sm py-1.5 px-1.5 focus-within:outline focus-within:outline-2 focus-within:outline-signal",
+                    row.status === "dead" && "border-l-2 border-l-destructive/70 bg-destructive/[0.05]",
+                  )}
                 >
                   <Checkbox
                     className="mt-0.5"

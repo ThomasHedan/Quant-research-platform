@@ -28,7 +28,9 @@ export function KillCard({
     <section
       className={cn(
         "border rounded-md p-4",
-        dead ? "border-destructive/40 bg-destructive/[0.04]" : "border-border bg-card",
+        dead
+          ? "border-destructive/60 border-l-4 border-l-destructive bg-destructive/[0.08]"
+          : "border-border bg-card",
       )}
       aria-label="Critères de mort pré-enregistrés"
     >

@@ -24,6 +24,7 @@ export function StatCell({
   digits = 2,
   ci,
   significant,
+  tone = "signal",
   className,
 }: {
   label?: string
@@ -31,6 +32,9 @@ export function StatCell({
   digits?: number
   ci?: ConfidenceInterval
   significant?: boolean
+  /** "destructive" réserve la mise en évidence au rouge — pour un risque de
+   * breach (I5), jamais pour une "mauvaise" valeur générique. */
+  tone?: "signal" | "destructive"
   className?: string
 }) {
   const display = typeof value === "number" ? formatNumber(value, digits) : value
@@ -42,7 +46,12 @@ export function StatCell({
       <span
         className={cn(
           "num text-sm font-medium",
-          significant === true && "text-signal-foreground bg-signal/70 px-1 rounded-sm w-fit",
+          significant === true &&
+            tone === "signal" &&
+            "text-signal-foreground bg-signal/70 px-1 rounded-sm w-fit",
+          significant === true &&
+            tone === "destructive" &&
+            "text-destructive-foreground bg-destructive/80 px-1 rounded-sm w-fit",
           significant === false && "text-muted-foreground",
         )}
       >

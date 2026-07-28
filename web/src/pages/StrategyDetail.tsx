@@ -12,8 +12,20 @@ import { EquityCurveChart } from "@/pages/strategy-detail/EquityCurveChart"
 import { MonteCarloFanChart } from "@/pages/strategy-detail/MonteCarloFanChart"
 import { CIStatTable } from "@/pages/strategy-detail/CIStatTable"
 import { WalkForwardTable } from "@/pages/strategy-detail/WalkForwardTable"
-import { isSignificantPValue, isLowPbo, isRobustDsr } from "@/pages/strategy-detail/significance"
+import {
+  isSignificantPValue,
+  isLowPbo,
+  isRobustDsr,
+  isMaterialBreachRisk,
+} from "@/pages/strategy-detail/significance"
 
+/**
+ * Panneau d'une section de la fiche. Bordé plutôt que simplement séparé par
+ * de l'espace : dans la grille multi-colonnes ci-dessous, le panneau est ce
+ * qui rend chaque bloc lisible indépendamment quand plusieurs se retrouvent
+ * côte à côte à l'écran (CLAUDE.md §7 — pas d'ombre portée, la profondeur
+ * vient du contraste panneau/fond).
+ */
 function Section({
   title,
   description,
@@ -24,7 +36,7 @@ function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className="flex flex-col gap-3">
+    <section className="break-inside-avoid-column mb-5 flex flex-col gap-3 rounded-md border border-border bg-card p-4">
       <div>
         <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
         {description ? <p className="text-xs text-muted-foreground mt-0.5">{description}</p> : null}
@@ -51,8 +63,11 @@ export function StrategyDetail() {
 
   const b = bundle.data
 
+  const strategyBreach = b.propsim.strategy
+  const baselineBreach = b.propsim.baseline
+
   return (
-    <div className="flex flex-col gap-8 max-w-[900px]">
+    <div className="flex flex-col gap-6">
       <div>
         <p className="text-xs text-muted-foreground">
           {b.family} — {b.universe}
@@ -65,7 +80,7 @@ export function StrategyDetail() {
         className={cn(
           "text-xs border rounded-md px-3 py-2 w-fit",
           b.holdout_flagged
-            ? "border-destructive/50 bg-destructive/[0.06] text-destructive"
+            ? "border-destructive/60 border-l-4 border-l-destructive bg-destructive/[0.08] text-destructive"
             : "border-border text-muted-foreground",
         )}
       >
@@ -76,175 +91,196 @@ export function StrategyDetail() {
 
       <KillCard hypothesis={b.hypothesis} verdict={b.kill_criteria_verdict} status={b.status} />
 
-      <Section title="Courbe d'equity" description="Rendement cumulé, par trade.">
-        <EquityCurveChart equityCurve={b.equity_curve} />
-      </Section>
+      {/* Colonnes CSS plutôt qu'une grille : chaque panneau garde sa hauteur
+          naturelle et se répartit pour remplir l'espace au lieu de laisser
+          des trous — l'objectif d'un maximum d'informations visibles sans
+          défiler prime ici sur un alignement de grille strict. */}
+      <div className="columns-1 xl:columns-2 gap-5">
+        <Section title="Courbe d'equity" description="Rendement cumulé, par trade.">
+          <EquityCurveChart equityCurve={b.equity_curve} />
+        </Section>
 
-      <Section title="MAE / MFE" description="Excursions moyennes, calibrent le SL/TP — jamais un choix a priori.">
-        <div className="grid grid-cols-2 gap-4 max-w-xs">
-          <StatCell label="MAE moyenne" value={formatNumber(b.mae_mfe_mean_mae, 3)} />
-          <StatCell label="MFE moyenne" value={formatNumber(b.mae_mfe_mean_mfe, 3)} />
-        </div>
-      </Section>
+        <Section title="Fan chart Monte Carlo" description="Percentiles p10 / p50 / p90 de trajectoire simulée (bootstrap par blocs).">
+          <MonteCarloFanChart fan={b.monte_carlo_fan} />
+        </Section>
 
-      <Section title="Stabilité par sous-période" description="Chronologique, quatre segments.">
-        <CIStatTable
-          labelHeader="Sous-période"
-          rows={b.subperiod_stats.map((s) => ({
-            key: s.label,
-            label: s.label,
-            stats: s.stats,
-            t_stat: s.t_stat,
-          }))}
-        />
-      </Section>
-
-      <Section
-        title="Régimes de volatilité réalisée"
-        description="Pour comprendre, pas pour filtrer : un edge présent dans un seul régime est une hypothèse affaiblie."
-      >
-        <CIStatTable
-          labelHeader="Tercile"
-          rows={b.vol_regime_stats.map((v) => ({
-            key: v.tercile,
-            label: v.tercile,
-            stats: v.stats,
-            t_stat: v.t_stat,
-          }))}
-        />
-      </Section>
-
-      <Section title="Fan chart Monte Carlo" description="Percentiles p10 / p50 / p90 de trajectoire simulée (bootstrap par blocs).">
-        <MonteCarloFanChart fan={b.monte_carlo_fan} />
-      </Section>
-
-      <Section
-        title="Fenêtres de walk-forward"
-        description="Paramètre sélectionné in-sample, performance mesurée uniquement sur la fenêtre suivante."
-      >
-        <WalkForwardTable result={b.walk_forward} />
-      </Section>
-
-      <Section
-        title="Comparaison à la règle naïve de contrôle"
-        description="Même information sans le déclencheur — si le déclencheur n'améliore pas significativement la naïve, ce résultat doit le dire."
-      >
-        <div className="grid grid-cols-2 gap-4 max-w-lg">
-          <StatCell label="Déclencheur" value={formatNumber(b.naive_comparison.triggered.mean, 3)} ci={b.naive_comparison.triggered} />
-          <StatCell label="Naïve (sans déclencheur)" value={formatNumber(b.naive_comparison.naive.mean, 3)} ci={b.naive_comparison.naive} />
-        </div>
-        <p className="text-xs">
-          delta ={" "}
-          <span className="num">{formatNumber(b.naive_comparison.mean_diff, 3)}</span>, p ={" "}
-          <span
-            className={cn(
-              "num",
-              isSignificantPValue(b.naive_comparison.p_value) && "text-signal-foreground bg-signal/70 px-1 rounded-sm",
-            )}
-          >
-            {formatNumber(b.naive_comparison.p_value, 3)}
-          </span>{" "}
-          —{" "}
-          {b.naive_comparison.improves_on_naive
-            ? "améliore significativement la naïve"
-            : "n'améliore pas significativement la naïve"}
-        </p>
-      </Section>
-
-      <Section title="Décomposition par instrument de l'univers">
-        <CIStatTable
-          labelHeader="Instrument"
-          rows={b.instrument_breakdown.map((i) => ({
-            key: i.symbol,
-            label: i.symbol,
-            stats: i.stats,
-            t_stat: i.t_stat,
-            hitRate: i.hit_rate,
-          }))}
-        />
-      </Section>
-
-      <Separator />
-
-      <Section
-        title="Validation statistique"
-        description="Bootstrap par blocs vs iid, permutation, DSR, PBO, sensibilité à la date de départ, coûts x2."
-      >
-        <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-          <div>
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-              Bootstrap : blocs vs iid
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <StatCell label="Max DD p95 (blocs)" value={formatNumber(b.bootstrap_comparison.block_max_drawdown_p95, 3)} />
-              <StatCell label="Max DD p95 (iid)" value={formatNumber(b.bootstrap_comparison.iid_max_drawdown_p95, 3)} />
-              <StatCell
-                label="Ratio de sous-estimation (DD)"
-                value={formatNumber(b.bootstrap_comparison.drawdown_underestimation_ratio, 2)}
-              />
-              <StatCell
-                label="Ratio de sous-estimation (série de pertes)"
-                value={formatNumber(b.bootstrap_comparison.streak_underestimation_ratio, 2)}
-              />
-            </div>
+        <Section title="MAE / MFE" description="Excursions moyennes, calibrent le SL/TP — jamais un choix a priori.">
+          <div className="grid grid-cols-2 gap-4 max-w-xs">
+            <StatCell label="MAE moyenne" value={formatNumber(b.mae_mfe_mean_mae, 3)} />
+            <StatCell label="MFE moyenne" value={formatNumber(b.mae_mfe_mean_mfe, 3)} />
           </div>
-          <div>
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-              Permutation &amp; robustesse
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              <StatCell
-                label="p-value permutation"
-                value={formatNumber(b.permutation.p_value, 3)}
-                significant={isSignificantPValue(b.permutation.p_value)}
-              />
-              <StatCell
-                label="DSR"
-                value={formatNumber(b.dsr.deflated_sharpe_ratio, 4)}
-                significant={isRobustDsr(b.dsr.deflated_sharpe_ratio)}
-              />
-              <StatCell label="n_trials (registre)" value={b.dsr.n_trials} />
-              <StatCell
-                label="PBO"
-                value={formatPct(b.pbo.probability_of_overfitting, 1)}
-                significant={isLowPbo(b.pbo.probability_of_overfitting)}
-              />
-              <StatCell
-                label="Coûts x2 : survit ?"
-                value={b.costs_stress.survives_2x_costs ? "oui" : "non"}
-              />
-              <StatCell
-                label="Écart-type sensibilité date de départ"
-                value={formatNumber(b.start_date_sensitivity.std_final_return, 3)}
-              />
-            </div>
-          </div>
-        </div>
-      </Section>
+        </Section>
 
-      <Section
-        title="Propsim"
-        description="P(passage) et baseline sans edge, jamais masquable — seule mesure honnête de la contribution réelle de l'edge."
-      >
-        <div className="grid grid-cols-2 gap-4 max-w-lg">
-          <StatCell
-            label={`P(passage) — ${b.propsim.strategy.firm_name}`}
-            value={formatPct(b.propsim.strategy.p_pass, 1)}
+        <Section
+          title="Propsim"
+          description="P(passage), baseline sans edge et probabilités de breach — jamais masquables (I5)."
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <StatCell
+              label={`P(passage) — ${b.propsim.strategy.firm_name}`}
+              value={formatPct(b.propsim.strategy.p_pass, 1)}
+            />
+            <StatCell label="P(passage) baseline sans edge" value={formatPct(b.propsim.baseline.p_pass, 1)} />
+            <StatCell
+              label="P(breach perte journalière)"
+              value={formatPct(strategyBreach.p_breach_daily_loss, 1)}
+              significant={isMaterialBreachRisk(strategyBreach.p_breach_daily_loss)}
+              tone="destructive"
+            />
+            <StatCell
+              label="P(breach DD max)"
+              value={formatPct(strategyBreach.p_breach_max_drawdown, 1)}
+              significant={isMaterialBreachRisk(strategyBreach.p_breach_max_drawdown)}
+              tone="destructive"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            baseline sans edge : breach perte journalière{" "}
+            <span className="num">{formatPct(baselineBreach.p_breach_daily_loss, 1)}</span>, breach DD max{" "}
+            <span className="num">{formatPct(baselineBreach.p_breach_max_drawdown, 1)}</span>
+          </p>
+          <p className="text-xs">
+            contribution de l'edge (delta P(passage)) ={" "}
+            <span className="num text-signal-foreground bg-signal/70 px-1 rounded-sm">
+              {formatPct(edgeContributionPPass(b.propsim), 1)}
+            </span>
+          </p>
+          <p className="text-xs">
+            <Link to={`/risk-surface?strategy=${b.strategy_id}`} className="underline underline-offset-2">
+              voir la surface de risque complète →
+            </Link>
+          </p>
+        </Section>
+
+        <Section title="Stabilité par sous-période" description="Chronologique, quatre segments.">
+          <CIStatTable
+            labelHeader="Sous-période"
+            rows={b.subperiod_stats.map((s) => ({
+              key: s.label,
+              label: s.label,
+              stats: s.stats,
+              t_stat: s.t_stat,
+            }))}
           />
-          <StatCell label="P(passage) baseline sans edge" value={formatPct(b.propsim.baseline.p_pass, 1)} />
-        </div>
-        <p className="text-xs">
-          contribution de l'edge (delta P(passage)) ={" "}
-          <span className="num text-signal-foreground bg-signal/70 px-1 rounded-sm">
-            {formatPct(edgeContributionPPass(b.propsim), 1)}
-          </span>
-        </p>
-        <p className="text-xs">
-          <Link to={`/risk-surface?strategy=${b.strategy_id}`} className="underline underline-offset-2">
-            voir la surface de risque complète →
-          </Link>
-        </p>
-      </Section>
+        </Section>
+
+        <Section
+          title="Régimes de volatilité réalisée"
+          description="Pour comprendre, pas pour filtrer : un edge présent dans un seul régime est une hypothèse affaiblie."
+        >
+          <CIStatTable
+            labelHeader="Tercile"
+            rows={b.vol_regime_stats.map((v) => ({
+              key: v.tercile,
+              label: v.tercile,
+              stats: v.stats,
+              t_stat: v.t_stat,
+            }))}
+          />
+        </Section>
+
+        <Section title="Décomposition par instrument de l'univers">
+          <CIStatTable
+            labelHeader="Instrument"
+            rows={b.instrument_breakdown.map((i) => ({
+              key: i.symbol,
+              label: i.symbol,
+              stats: i.stats,
+              t_stat: i.t_stat,
+              hitRate: i.hit_rate,
+            }))}
+          />
+        </Section>
+
+        <Section
+          title="Comparaison à la règle naïve de contrôle"
+          description="Même information sans le déclencheur — si le déclencheur n'améliore pas significativement la naïve, ce résultat doit le dire."
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <StatCell label="Déclencheur" value={formatNumber(b.naive_comparison.triggered.mean, 3)} ci={b.naive_comparison.triggered} />
+            <StatCell label="Naïve (sans déclencheur)" value={formatNumber(b.naive_comparison.naive.mean, 3)} ci={b.naive_comparison.naive} />
+          </div>
+          <p className="text-xs">
+            delta ={" "}
+            <span className="num">{formatNumber(b.naive_comparison.mean_diff, 3)}</span>, p ={" "}
+            <span
+              className={cn(
+                "num",
+                isSignificantPValue(b.naive_comparison.p_value) && "text-signal-foreground bg-signal/70 px-1 rounded-sm",
+              )}
+            >
+              {formatNumber(b.naive_comparison.p_value, 3)}
+            </span>{" "}
+            —{" "}
+            {b.naive_comparison.improves_on_naive
+              ? "améliore significativement la naïve"
+              : "n'améliore pas significativement la naïve"}
+          </p>
+        </Section>
+
+        <Section
+          title="Fenêtres de walk-forward"
+          description="Paramètre sélectionné in-sample, performance mesurée uniquement sur la fenêtre suivante."
+        >
+          <WalkForwardTable result={b.walk_forward} />
+        </Section>
+
+        <Section
+          title="Validation statistique"
+          description="Bootstrap par blocs vs iid, permutation, DSR, PBO, sensibilité à la date de départ, coûts x2."
+        >
+          <div className="flex flex-col gap-4">
+            <div>
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                Bootstrap : blocs vs iid
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <StatCell label="Max DD p95 (blocs)" value={formatNumber(b.bootstrap_comparison.block_max_drawdown_p95, 3)} />
+                <StatCell label="Max DD p95 (iid)" value={formatNumber(b.bootstrap_comparison.iid_max_drawdown_p95, 3)} />
+                <StatCell
+                  label="Ratio de sous-estimation (DD)"
+                  value={formatNumber(b.bootstrap_comparison.drawdown_underestimation_ratio, 2)}
+                />
+                <StatCell
+                  label="Ratio de sous-estimation (série de pertes)"
+                  value={formatNumber(b.bootstrap_comparison.streak_underestimation_ratio, 2)}
+                />
+              </div>
+            </div>
+            <div>
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                Permutation &amp; robustesse
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <StatCell
+                  label="p-value permutation"
+                  value={formatNumber(b.permutation.p_value, 3)}
+                  significant={isSignificantPValue(b.permutation.p_value)}
+                />
+                <StatCell
+                  label="DSR"
+                  value={formatNumber(b.dsr.deflated_sharpe_ratio, 4)}
+                  significant={isRobustDsr(b.dsr.deflated_sharpe_ratio)}
+                />
+                <StatCell label="n_trials (registre)" value={b.dsr.n_trials} />
+                <StatCell
+                  label="PBO"
+                  value={formatPct(b.pbo.probability_of_overfitting, 1)}
+                  significant={isLowPbo(b.pbo.probability_of_overfitting)}
+                />
+                <StatCell
+                  label="Coûts x2 : survit ?"
+                  value={b.costs_stress.survives_2x_costs ? "oui" : "non"}
+                />
+                <StatCell
+                  label="Écart-type sensibilité date de départ"
+                  value={formatNumber(b.start_date_sensitivity.std_final_return, 3)}
+                />
+              </div>
+            </div>
+          </div>
+        </Section>
+      </div>
 
       <Separator />
 

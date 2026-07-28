@@ -200,7 +200,13 @@ export function Leaderboard() {
             </thead>
             <tbody>
               {table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="border-b border-border/60 last:border-b-0">
+                <tr
+                  key={row.id}
+                  className={cn(
+                    "border-b border-border/60 last:border-b-0",
+                    row.original.status === "dead" && "border-l-2 border-l-destructive/70 bg-destructive/[0.04]",
+                  )}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-2.5 py-2 whitespace-nowrap">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
