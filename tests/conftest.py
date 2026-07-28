@@ -11,18 +11,26 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 import pytest
+from edgelab.costs.models import CostModel, FixedSpreadCost, SlippageByOrderType
 from edgelab.data.lockbox import HoldoutLockbox
 from edgelab.data.manifest import DatasetPartition
 from edgelab.data.store import DatasetStore
 from edgelab.registry.models import Trial, TrialType
 from edgelab.registry.repository import TrialRepository
-from edgelab.universe import FX_MAJORS, INDEX_FUTURES, Instrument
+from edgelab.universe import (
+    FX_MAJORS,
+    INDEX_FUTURES,
+    AssetClass,
+    Instrument,
+    SessionCalendar,
+    SessionWindow,
+)
 
 
 @pytest.fixture
@@ -133,3 +141,35 @@ def dataset_store(tmp_path: Path) -> Iterator[DatasetStore]:
     """Un `DatasetStore` (catalogue DuckDB + Parquet) adossé à un répertoire temporaire."""
     with DatasetStore(tmp_path / "catalog.duckdb", tmp_path / "bars") as store:
         yield store
+
+
+@pytest.fixture
+def make_research_instrument() -> Callable[..., Instrument]:
+    """Factory produisant un instrument minimal pour les tests d'event study.
+
+    Le calendrier de session n'est pas consulté par le calcul d'event study
+    (qui opère directement sur les barres fournies) ; il doit seulement être
+    valide pour construire l'`Instrument`. Coût nul par défaut pour isoler
+    la mesure du signal de tout biais de coût dans les tests de récupération
+    d'amplitude.
+    """
+    calendar = SessionCalendar(
+        timezone="UTC",
+        windows=tuple(
+            SessionWindow(weekday=d, open=time(0, 0), close=time(0, 0)) for d in range(7)
+        ),
+    )
+
+    def _make(symbol: str, cost_model: CostModel | None = None) -> Instrument:
+        return Instrument(
+            symbol=symbol,
+            name=symbol,
+            asset_class=AssetClass.FX,
+            session_calendar=calendar,
+            cost_model=cost_model
+            or FixedSpreadCost(spread=0.0, commission=0.0, slippage=SlippageByOrderType()),
+            price_decimals=5,
+            pip_size=0.0001,
+        )
+
+    return _make

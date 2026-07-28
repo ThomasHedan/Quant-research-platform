@@ -30,6 +30,7 @@ dev = [
     "hypothesis>=6.122",
     "httpx>=0.28",
     "types-pyyaml>=6.0",
+    "scipy-stubs>=1.14",
 ]
 
 [build-system]
