@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.egg-info/
+dist/
+build/
+
+# EdgeLab data & artifacts (never commit market data, registry DB, or run artifacts)
+/data/
+*.duckdb
+*.sqlite
+*.sqlite3
+/artifacts/
+/runs/
+
+# Node / web
+web/node_modules/
+web/dist/
+web/.vite/
+*.local
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Env
+.env
+.env.*
+!.env.example
