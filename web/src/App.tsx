@@ -1,14 +1,29 @@
+import { BrowserRouter, Route, Routes } from "react-router-dom"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import { AppShell } from "@/components/AppShell"
+import { Leaderboard } from "@/pages/Leaderboard"
+import { StrategyDetail } from "@/pages/StrategyDetail"
+import { RiskSurfacePage } from "@/pages/RiskSurfacePage"
+import { PortfolioExplorer } from "@/pages/PortfolioExplorer"
+import { PapersLibrary } from "@/pages/PapersLibrary"
+import { TrialLog } from "@/pages/TrialLog"
+
 function App() {
   return (
-    <main className="flex min-h-svh items-center justify-center p-8">
-      <div className="text-center">
-        <h1 className="text-2xl font-semibold">EdgeLab</h1>
-        <p className="mt-2 text-sm text-neutral-500">
-          Squelette du front — vues à construire en Phase 8, une fois le
-          leaderboard et propsim disponibles côté API.
-        </p>
-      </div>
-    </main>
+    <TooltipProvider delayDuration={150}>
+      <BrowserRouter>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route index element={<Leaderboard />} />
+            <Route path="strategies/:strategyId" element={<StrategyDetail />} />
+            <Route path="risk-surface" element={<RiskSurfacePage />} />
+            <Route path="portfolio" element={<PortfolioExplorer />} />
+            <Route path="papers" element={<PapersLibrary />} />
+            <Route path="trials" element={<TrialLog />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </TooltipProvider>
   )
 }
 
