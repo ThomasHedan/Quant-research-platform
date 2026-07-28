@@ -1,0 +1,34 @@
+firm_name: The5ers
+ruleset_name: "High Stakes"
+verified_at: null
+source_url: "https://the5ers.com/high-stakes/"
+note: >
+  UNVERIFIED. the5ers.com/high-stakes/ et help.the5ers.com ont renvoyé des
+  erreurs serveur (503 / 404) lors de la tentative de récupération directe
+  dans cette session. Les valeurs ci-dessous (Phase 1 : 10 % de profit ;
+  Phase 2 : 5 % ; 10 % de perte max statique sur le solde initial ; 5 % de
+  perte journalière ; 3 jours minimum profitables) proviennent de résultats
+  de recherche attribués à ces pages officielles, non lus directement. La
+  nuance « jours profitables » (>= 0,5 % du solde initial, pas seulement
+  « jour tradé ») n'est pas modélisée : min_trading_days compte tout jour
+  avec au moins un trade, une simplification documentée dans
+  propsim/README.md. À re-vérifier avant tout usage décisionnel.
+phases:
+  - name: phase_1
+    profit_target_pct: 0.10
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 3
+    max_duration_days: null
+  - name: phase_2
+    profit_target_pct: 0.05
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 3
+    max_duration_days: null
+restrictions: {}
+profit_split: {}

@@ -15,12 +15,14 @@ from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
 import pytest
 from edgelab.costs.models import CostModel, FixedSpreadCost, SlippageByOrderType
 from edgelab.data.lockbox import HoldoutLockbox
 from edgelab.data.manifest import DatasetPartition
 from edgelab.data.store import DatasetStore
+from edgelab.propsim.models import ChallengePhase, DrawdownBasis, DrawdownType, PropFirmRuleset
 from edgelab.registry.models import Trial, TrialType
 from edgelab.registry.repository import TrialRepository
 from edgelab.strategies.models import HypothesisSheet, KillCriterion
@@ -217,3 +219,49 @@ def lifecycle_repository(lifecycle_db_path: Path) -> Iterator[StrategyLifecycleR
     """Un `StrategyLifecycleRepository` adossé à un fichier SQLite temporaire."""
     with StrategyLifecycleRepository(lifecycle_db_path) as repo:
         yield repo
+
+
+@pytest.fixture
+def make_phase() -> Callable[..., ChallengePhase]:
+    """Factory produisant un `ChallengePhase` valide, personnalisable via overrides."""
+
+    def _make(**overrides: Any) -> ChallengePhase:
+        defaults: dict[str, Any] = {
+            "name": "challenge",
+            "profit_target_pct": 0.10,
+            "max_daily_loss_pct": 0.05,
+            "max_drawdown_pct": 0.10,
+            "drawdown_type": DrawdownType.STATIC,
+            "drawdown_basis": DrawdownBasis.BALANCE,
+            "min_trading_days": 4,
+            "max_duration_days": None,
+        }
+        defaults.update(overrides)
+        return ChallengePhase(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def make_ruleset(make_phase: Callable[..., ChallengePhase]) -> Callable[..., PropFirmRuleset]:
+    """Factory produisant un `PropFirmRuleset` à un seul palier, personnalisable via overrides."""
+
+    def _make(**overrides: Any) -> PropFirmRuleset:
+        phase_overrides = overrides.pop("phase_overrides", {})
+        defaults: dict[str, Any] = {
+            "firm_name": "TestFirm",
+            "ruleset_name": "Test Ruleset",
+            "phases": (make_phase(**phase_overrides),),
+        }
+        defaults.update(overrides)
+        return PropFirmRuleset(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def positive_edge_trades() -> np.ndarray:
+    """100 trades en multiples de R à edge positif net (45 % à +2R, 55 % à -1R, mean=0.35)."""
+    trades = np.concatenate([np.full(45, 2.0), np.full(55, -1.0)])
+    np.random.default_rng(3).shuffle(trades)
+    return trades

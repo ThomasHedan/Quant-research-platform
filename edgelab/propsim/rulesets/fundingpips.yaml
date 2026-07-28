@@ -1,0 +1,41 @@
+firm_name: FundingPips
+ruleset_name: "2-Step Standard"
+verified_at: null
+source_url: "https://fundingpips.com/trading-objectives"
+note: >
+  UNVERIFIED. La page officielle fundingpips.com/trading-objectives et
+  help.fundingpips.com n'ont pas pu être récupérées dans cette session (403 /
+  429 côté serveur). Les valeurs ci-dessous proviennent de résultats de
+  recherche attribués à ces mêmes pages officielles (Phase 1 : 8 % de profit,
+  5 % de perte journalière, 10 % de drawdown max, minimum 3 jours de trading)
+  mais n'ont pas été lues directement. Le palier Phase 2 (5 % de profit,
+  mêmes limites de perte) est une extrapolation par symétrie avec les autres
+  firmes à deux paliers, non confirmée. À re-vérifier avant tout usage
+  décisionnel.
+phases:
+  - name: phase_1
+    profit_target_pct: 0.08
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 3
+    max_duration_days: null
+  - name: phase_2
+    profit_target_pct: 0.05
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 3
+    max_duration_days: null
+  - name: funded
+    profit_target_pct: null
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 0
+    max_duration_days: null
+restrictions: {}
+profit_split: {}

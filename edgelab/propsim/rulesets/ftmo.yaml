@@ -1,0 +1,38 @@
+firm_name: FTMO
+ruleset_name: "FTMO Challenge (2-Step)"
+verified_at: 2026-07-28
+source_url: "https://ftmo.com/en/trading-objectives/"
+note: >
+  Cibles de profit, perte journalière max et drawdown max lues directement sur
+  ftmo.com/en/trading-objectives/ (paliers Challenge, Verification, FTMO
+  Account). profit_split (80 %) est une valeur générale bien établie du
+  programme FTMO, non re-vérifiée dans cette même session — voir
+  ftmo.com/en/ftmo-account/ avant de s'y fier pour un calcul de payout exact.
+phases:
+  - name: challenge
+    profit_target_pct: 0.10
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 4
+    max_duration_days: null
+  - name: verification
+    profit_target_pct: 0.05
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 4
+    max_duration_days: null
+  - name: funded
+    profit_target_pct: null
+    max_daily_loss_pct: 0.05
+    max_drawdown_pct: 0.10
+    drawdown_type: static
+    drawdown_basis: balance
+    min_trading_days: 0
+    max_duration_days: null
+restrictions: {}
+profit_split:
+  trader_share: 0.80

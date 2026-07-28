@@ -1,0 +1,29 @@
+firm_name: Topstep
+ruleset_name: "Trading Combine (50K)"
+verified_at: null
+source_url: "https://help.topstep.com/en/articles/8284197-trading-combine-parameters"
+note: >
+  UNVERIFIED. La mécanique du Maximum Loss Limit (trailing, tampon de 2 000 $
+  sur un compte 50K soit 4 %, se verrouille au solde de départ une fois
+  atteint) et le Daily Loss Limit (1 000 $ sur 50K soit 2 %) sont confirmés
+  sur help.topstep.com (articles 8284204 et 10490293). L'objectif de profit
+  (6 %, soit 3 000 $ sur 50K) et le nombre minimum de jours de trading (2)
+  n'ont pas pu être confirmés sur une page officielle accessible dans cette
+  session (pages introuvables ou sans le chiffre) ; ce sont des valeurs
+  recoupées par plusieurs sources secondaires convergentes, à re-vérifier
+  avant tout usage décisionnel. drawdown_basis="balance" est une
+  approximation : officiellement le MLL réagit au P&L temps réel (positions
+  ouvertes incluses), une notion d'equity intrabar que ce simulateur (au
+  niveau du trade clôturé, pas de la barre) ne modélise pas encore — limite
+  documentée dans propsim/README.md.
+phases:
+  - name: combine
+    profit_target_pct: 0.06
+    max_daily_loss_pct: 0.02
+    max_drawdown_pct: 0.04
+    drawdown_type: trailing
+    drawdown_basis: balance
+    min_trading_days: 2
+    max_duration_days: null
+restrictions: {}
+profit_split: {}

@@ -1,7 +1,19 @@
 # edgelab.propsim
 
-**Rôle.** Simulateur de règles de prop firm : P(passage), surface de risque, garde-fou de perte journalière (I5, fonction objectif du projet).
+**Rôle.** Simulateur de règles de prop firm : P(passage), surface de risque, garde-fou de perte journalière (I5, fonction objectif du projet). C'est la sortie de ce module — jamais le Sharpe — qui doit piloter le classement, l'allocation et le dimensionnement.
 
-**Ce module refuse de faire.** Masquer ou permettre de désactiver la baseline sans edge, classer par Sharpe plutôt que par P(passage).
+**Décision de design (rééchantillonnage).** `simulate_challenge` ne rejoue jamais l'historique de trades brut : il le rééchantillonne par blocs (`_resample_paths`, une généralisation de `validation.bootstrap.block_bootstrap_paths` à une longueur de chemin arbitraire) pour préserver la dépendance sérielle des séries de pertes — exactement ce qui fait breacher un compte. Le bootstrap iid n'est jamais utilisé ici, conformément à la spec.
 
-**Statut.** Squelette — implémentation à venir selon l'ordre de phase défini dans `CLAUDE.md`.
+**Décision de design (risque).** Le risque par trade est recalculé sur le solde courant à chaque trade (risque fixe en %, avec effet de capitalisation), pas sur le capital initial. C'est la pratique de gestion de risque standard sur laquelle ce module est bâti.
+
+**Décision de design (drawdown statique vs trailing).** Le seuil statique reste ancré au capital initial ; le seuil trailing suit le plus haut solde atteint, qui ne redescend jamais. À `max_drawdown_pct` identique, le trailing est donc toujours au moins aussi restrictif, et strictement plus dès qu'une trajectoire est passée en profit avant de retomber — c'est ce qui produit mécaniquement un P(passage) plus bas, sans qu'il soit besoin de le forcer artificiellement.
+
+**Décision de design (baseline sans edge).** `zero_edge_returns` recentre la distribution de trades sur une moyenne nulle par simple soustraction — un décalage ne change pas la variance, c'est la construction la plus simple et la plus honnête d'un « profil de variance identique, edge nul ». `simulate_with_baseline` la calcule systématiquement à côté de la stratégie ; rien dans l'API ne permet de l'omettre.
+
+**Décision de design (rulesets).** `PropFirmRuleset` est déclaratif (YAML, `edgelab/propsim/rulesets/`), pas du code : ajouter une firme ou corriger un chiffre ne touche jamais au moteur. `is_verified` ne porte que sur les paramètres qui alimentent la simulation (cibles de profit, pertes, drawdown, jours) — le profit split et les restrictions sont informatifs et peuvent ne pas avoir été vérifiés à la même date. Seul le ruleset FTMO est vérifié dans cette livraison (source officielle lue directement, `ftmo.com/en/trading-objectives/`) ; The5ers, FundingPips et Topstep sont livrés `unverified` avec un champ `note` détaillant précisément quels chiffres sont confirmés sur une source officielle et lesquels proviennent d'un recoupement secondaire non lu directement — les pages officielles correspondantes ont renvoyé des erreurs serveur (403/404/429/503) lors des tentatives de récupération. Les quatre restrictions de trading (news, overnight, week-end, hedging) sont volontairement laissées à `None` (non confirmé) plutôt que devinées.
+
+**Limite connue.** La granularité est le trade clôturé, pas la barre : il n'y a pas de P&L flottant intrabar, donc `DrawdownBasis.EQUITY` est traité comme `DrawdownBasis.BALANCE` dans le moteur actuel. Cette distinction, décrite comme décisive par la spec, attendra un moteur de backtest (Phase 3) produisant un vrai P&L flottant à chaque pas de temps. De même, `min_trading_days` compte tout jour où au moins un trade a été pris, pas les nuances propres à certaines firmes (« jour profitable » au sens strict chez The5ers, par exemple) — simplification documentée dans les `note` des rulesets concernés.
+
+**Ce module refuse de faire.** Masquer ou permettre de désactiver la baseline sans edge. Classer par Sharpe plutôt que par P(passage). Deviner un chiffre de règle de prop firm non sourcé sans le marquer `unverified`. Deviner une restriction de conformité (news/overnight/week-end/hedging) plutôt que l'afficher comme inconnue.
+
+**Statut.** Phase 5 livrée : `models.py`, `simulator.py`, `baseline.py`, `risk_surface.py`, `loader.py`, quatre rulesets (`ftmo`, `the5ers`, `fundingpips`, `topstep`).
