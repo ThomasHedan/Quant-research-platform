@@ -196,6 +196,29 @@ def test_portfolio_combination_returns_marginal_contributions(
     assert len(body["marginal_contributions"]) == 2
 
 
+def test_portfolio_optimize_returns_weights_and_portfolio_p_pass(
+    client: TestClient, make_strategy_bundle: Callable[..., Any]
+) -> None:
+    """L'endpoint d'allocation optimale renvoie des poids et un P(passage) de portefeuille."""
+    rng = np.random.default_rng(6)
+    store._write_bundle(make_strategy_bundle(strategy_id="a", returns=rng.normal(0.3, 1.0, 100)))
+    store._write_bundle(make_strategy_bundle(strategy_id="b", returns=rng.normal(0.3, 1.0, 100)))
+
+    response = client.get("/api/portfolio/optimize", params={"strategy_ids": ["a", "b"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body["weights"].keys()) == {"a", "b"}
+    assert 0.0 <= body["portfolio"]["p_pass"] <= 1.0
+
+
+def test_portfolio_optimize_404s_for_an_unknown_strategy(client: TestClient) -> None:
+    """Optimiser une allocation sur une stratégie inconnue renvoie 404."""
+    response = client.get("/api/portfolio/optimize", params={"strategy_ids": ["nope"]})
+
+    assert response.status_code == 404
+
+
 def test_papers_status_is_explicit_about_phase_7_being_unbuilt(client: TestClient) -> None:
     """La vue papiers dit honnêtement qu'elle n'est pas livrée, jamais un placeholder silencieux."""
     body = client.get("/api/papers").json()

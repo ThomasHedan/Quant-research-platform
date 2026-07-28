@@ -5,6 +5,7 @@
  */
 
 import type {
+  AllocationSearchResult,
   CombinationResult,
   CorrelationMatrix,
   LeaderboardRow,
@@ -72,6 +73,12 @@ export const api = {
     request<CorrelationMatrix>("/api/portfolio/correlation", { strategy_ids: strategyIds }),
   getPortfolioCombination: (strategyIds: string[], ruleset?: string, phase?: string) =>
     request<CombinationResult>("/api/portfolio/combination", {
+      strategy_ids: strategyIds,
+      ...(ruleset ? { ruleset } : {}),
+      ...(phase ? { phase } : {}),
+    }),
+  getOptimalAllocation: (strategyIds: string[], ruleset?: string, phase?: string) =>
+    request<AllocationSearchResult>("/api/portfolio/optimize", {
       strategy_ids: strategyIds,
       ...(ruleset ? { ruleset } : {}),
       ...(phase ? { phase } : {}),

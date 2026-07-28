@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from edgelab.api import store
 from edgelab.api.schemas import LeaderboardRow, PapersStatus, StrategyBundle, TrialLink
-from edgelab.portfolio.models import CombinationResult, CorrelationMatrix
+from edgelab.portfolio.models import AllocationSearchResult, CombinationResult, CorrelationMatrix
 from edgelab.propsim.models import RiskSurfaceResult
 from edgelab.registry.models import Trial
 
@@ -137,6 +137,21 @@ def get_combination(
     weights = dict.fromkeys(strategy_ids, weight)
     try:
         return store.run_combination(strategy_ids, weights, ruleset, phase)
+    except store.StrategyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/portfolio/optimize", response_model=AllocationSearchResult)
+def get_optimal_allocation(
+    strategy_ids: Annotated[list[str], Query()],
+    ruleset: Annotated[str, Query()] = "ftmo",
+    phase: Annotated[str | None, Query()] = None,
+) -> AllocationSearchResult:
+    """Poids qui maximisent P(passage) du portefeuille, jamais le Sharpe ni le rendement (I5)."""
+    try:
+        return store.run_optimize_allocation(strategy_ids, ruleset, phase)
     except store.StrategyNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except KeyError as exc:

@@ -283,6 +283,12 @@ export interface CombinationResult {
   marginal_contributions: MarginalContribution[]
 }
 
+export interface AllocationSearchResult {
+  weights: Record<string, number>
+  portfolio: PropSimResult
+  n_candidates_evaluated: number
+}
+
 export interface PapersStatus {
   implemented: boolean
   message: string

@@ -120,6 +120,20 @@ def test_run_combination_returns_a_joint_p_pass(make_strategy_bundle: Callable[.
     assert {m.strategy_id for m in result.marginal_contributions} == {"a", "b"}
 
 
+def test_run_optimize_allocation_returns_weights_summing_to_one(
+    make_strategy_bundle: Callable[..., Any],
+) -> None:
+    """L'allocation optimale délègue à `edgelab.portfolio.optimize_allocation` (I5)."""
+    rng = np.random.default_rng(3)
+    store._write_bundle(make_strategy_bundle(strategy_id="a", returns=rng.normal(0.3, 1.0, 100)))
+    store._write_bundle(make_strategy_bundle(strategy_id="b", returns=rng.normal(0.3, 1.0, 100)))
+
+    result = store.run_optimize_allocation(["a", "b"], "ftmo")
+
+    assert result.weights.keys() == {"a", "b"}
+    assert sum(result.weights.values()) == pytest.approx(1.0)
+
+
 def test_run_risk_surface_recomputes_for_a_chosen_ruleset(
     make_strategy_bundle: Callable[..., Any],
 ) -> None:

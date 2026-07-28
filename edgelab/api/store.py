@@ -23,9 +23,9 @@ import numpy as np
 from edgelab.api.schemas import LeaderboardRow, StrategyBundle
 from edgelab.config import DEFAULT_LOCKBOX_DB, DEFAULT_REGISTRY_DB
 from edgelab.data.lockbox import HoldoutLockbox
-from edgelab.portfolio.combination import explore_combination
+from edgelab.portfolio.combination import explore_combination, optimize_allocation
 from edgelab.portfolio.correlation import correlation_matrix_by_trade
-from edgelab.portfolio.models import CombinationResult, CorrelationMatrix
+from edgelab.portfolio.models import AllocationSearchResult, CombinationResult, CorrelationMatrix
 from edgelab.propsim.loader import load_shipped_rulesets
 from edgelab.propsim.models import PropFirmRuleset, RiskSurfaceResult
 from edgelab.propsim.risk_surface import sweep_risk_surface
@@ -50,6 +50,7 @@ __all__ = [
     "registry_trials",
     "run_combination",
     "run_correlation",
+    "run_optimize_allocation",
     "run_risk_surface",
 ]
 """`DEFAULT_REGISTRY_DB`/`DEFAULT_LOCKBOX_DB` sont réexportés délibérément : les tests
@@ -261,6 +262,27 @@ def run_combination(
     return explore_combination(
         returns_by_strategy,
         weights=weights,
+        ruleset=ruleset,
+        phase_name=phase_name,
+        risk_per_trade_pct=0.01,
+        trades_per_day=2,
+        max_days=180,
+        n_paths=_N_PATHS_INTERACTIVE,
+        rng=rng,
+    )
+
+
+def run_optimize_allocation(
+    strategy_ids: list[str], ruleset_name: str, phase_name: str | None = None
+) -> AllocationSearchResult:
+    """Poids qui maximisent P(passage) du portefeuille — jamais le Sharpe (I5), job trigger."""
+    bundles = {sid: get_bundle(sid) for sid in strategy_ids}
+    returns_by_strategy = _aligned_returns(bundles)
+    ruleset = get_ruleset(ruleset_name)
+    phase_name = phase_name or ruleset.phases[0].name
+    rng = np.random.default_rng(_stable_seed(f"optimize:{','.join(sorted(strategy_ids))}"))
+    return optimize_allocation(
+        returns_by_strategy,
         ruleset=ruleset,
         phase_name=phase_name,
         risk_per_trade_pct=0.01,
