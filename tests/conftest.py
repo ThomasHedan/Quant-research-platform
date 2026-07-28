@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable, Iterator
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from edgelab.data.manifest import DatasetPartition
 from edgelab.data.store import DatasetStore
 from edgelab.registry.models import Trial, TrialType
 from edgelab.registry.repository import TrialRepository
+from edgelab.strategies.models import HypothesisSheet, KillCriterion
 from edgelab.universe import (
     FX_MAJORS,
     INDEX_FUTURES,
@@ -31,6 +32,7 @@ from edgelab.universe import (
     SessionCalendar,
     SessionWindow,
 )
+from edgelab.validation.kill_criteria import StrategyLifecycleRepository
 
 
 @pytest.fixture
@@ -173,3 +175,45 @@ def make_research_instrument() -> Callable[..., Instrument]:
         )
 
     return _make
+
+
+@pytest.fixture
+def make_hypothesis() -> Callable[..., HypothesisSheet]:
+    """Factory produisant une `HypothesisSheet` (I2) valide, personnalisable via overrides."""
+
+    def _make(**overrides: Any) -> HypothesisSheet:
+        defaults: dict[str, Any] = {
+            "strategy_id": "orb-fade-v1",
+            "economic_hypothesis": "Les mèches d'ouverture asiatique fadent en session londonienne",
+            "predicted_direction": "both",
+            "predicted_amplitude_atr": 0.5,
+            "predicted_hit_rate": 0.55,
+            "predicted_horizon_bars": 20,
+            "where_it_should_not_work": "En période de forte tendance directionnelle (ADX > 30)",
+            "kill_criteria": (
+                KillCriterion(
+                    name="t-stat trop faible",
+                    metric="t_stat",
+                    comparison="less_than",
+                    threshold=2.0,
+                    recorded_at=datetime(2024, 1, 1, tzinfo=UTC),
+                ),
+            ),
+        }
+        defaults.update(overrides)
+        return HypothesisSheet(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def lifecycle_db_path(tmp_path: Path) -> Path:
+    """Chemin d'un registre de cycle de vie de stratégies SQLite isolé pour un test."""
+    return tmp_path / "lifecycle.sqlite3"
+
+
+@pytest.fixture
+def lifecycle_repository(lifecycle_db_path: Path) -> Iterator[StrategyLifecycleRepository]:
+    """Un `StrategyLifecycleRepository` adossé à un fichier SQLite temporaire."""
+    with StrategyLifecycleRepository(lifecycle_db_path) as repo:
+        yield repo
