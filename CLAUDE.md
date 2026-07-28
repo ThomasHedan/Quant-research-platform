@@ -269,5 +269,6 @@ La phase 8 (UI) vient tard, mais son squelette peut démarrer dès la fin de la 
 
 ## 8. État du projet
 
-* **Fait** : squelette du monorepo (structure de packages, `pyproject.toml`, tooling `uv`/`ruff`/`mypy`/`pytest`, squelette `web/`). Aucune logique métier — c'est la prochaine étape.
-* **Prochaine session** : Phase 0 (registre, hashing de lineage, lockbox, commandes `edgelab trial list` / `edgelab trial show`), avec ses critères d'acceptation vérifiés avant toute autre phase.
+* **Fait** : squelette du monorepo (structure de packages, `pyproject.toml`, tooling `uv`/`ruff`/`mypy`/`pytest`, squelette `web/`).
+* **Fait — Phase 0** : `registry/` (modèle `Trial` gelé, hashing de lineage déterministe et sensible à l'octet, `TrialRepository` append-only avec garde-fou SQL en plus du garde-fou Python), `data/lockbox.py` (I3 : raison écrite obligatoire, compteur d'accès permanent, drapeau à 3 accès), commandes CLI `edgelab trial list` / `edgelab trial show <id>`. Les trois critères d'acceptation de la Phase 0 sont couverts par des tests et vérifiés en exécution réelle (`uv run pytest`, `uv run edgelab trial list/show` contre un registre réel). Suite verte, 98,9 % de couverture branches.
+* **Prochaine session** : Phase 1 (ingestion Dukascopy/CSV/Parquet, futures continus, contrôle d'intégrité et quarantaine, manifeste de dataset versionné, `costs/`, `universe/`), avec ses critères d'acceptation vérifiés avant toute autre phase.
