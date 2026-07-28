@@ -265,3 +265,17 @@ def positive_edge_trades() -> np.ndarray:
     trades = np.concatenate([np.full(45, 2.0), np.full(55, -1.0)])
     np.random.default_rng(3).shuffle(trades)
     return trades
+
+
+@pytest.fixture
+def make_edge_trades() -> Callable[[int], np.ndarray]:
+    """Factory produisant 100 trades au même edge net (45 % à +2R, 55 % à -1R) mais mélangés
+    indépendamment par graine — deux appels avec des graines différentes produisent des
+    séries au même edge mais décorrélées ; la même graine reproduit `positive_edge_trades`."""
+
+    def _make(seed: int) -> np.ndarray:
+        trades = np.concatenate([np.full(45, 2.0), np.full(55, -1.0)])
+        np.random.default_rng(seed).shuffle(trades)
+        return trades
+
+    return _make

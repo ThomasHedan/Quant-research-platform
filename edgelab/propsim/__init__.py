@@ -17,7 +17,7 @@ from edgelab.propsim.models import (
     RiskSurfaceResult,
 )
 from edgelab.propsim.risk_surface import kelly_fraction, sweep_risk_surface
-from edgelab.propsim.simulator import simulate_challenge
+from edgelab.propsim.simulator import simulate_challenge, simulate_from_paths
 
 __all__ = [
     "ChallengePhase",
@@ -35,6 +35,7 @@ __all__ = [
     "load_ruleset",
     "load_shipped_rulesets",
     "simulate_challenge",
+    "simulate_from_paths",
     "simulate_with_baseline",
     "sweep_risk_surface",
     "zero_edge_returns",

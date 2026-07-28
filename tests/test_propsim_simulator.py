@@ -5,7 +5,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 from edgelab.propsim.models import DailyLossGuard, DrawdownType, PropFirmRuleset
-from edgelab.propsim.simulator import simulate_challenge
+from edgelab.propsim.simulator import simulate_challenge, simulate_from_paths
 
 
 def test_simulate_challenge_rejects_empty_trades(
@@ -47,6 +47,45 @@ def test_simulate_challenge_rejects_non_positive_parameters(
             ruleset=make_ruleset(),
             phase_name="challenge",
             rng=np.random.default_rng(0),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+
+def test_simulate_from_paths_rejects_empty_paths(
+    make_ruleset: Callable[..., PropFirmRuleset],
+) -> None:
+    """`simulate_from_paths` est un point d'entrée public (réutilisé par `portfolio`) qui se
+    valide lui-même, indépendamment de `simulate_challenge`."""
+    with pytest.raises(ValueError, match="trade_paths"):
+        simulate_from_paths(
+            np.empty((0, 0)),
+            ruleset=make_ruleset(),
+            phase_name="challenge",
+            risk_per_trade_pct=0.01,
+            trades_per_day=2,
+            max_days=10,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("risk_per_trade_pct", 0.0), ("trades_per_day", 0), ("max_days", 0)]
+)
+def test_simulate_from_paths_rejects_non_positive_parameters(
+    make_ruleset: Callable[..., PropFirmRuleset], field: str, value: int | float
+) -> None:
+    """Risque, trades/jour et horizon doivent être strictement positifs."""
+    kwargs: dict[str, object] = {
+        "risk_per_trade_pct": 0.01,
+        "trades_per_day": 2,
+        "max_days": 10,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        simulate_from_paths(
+            np.zeros((5, 20)),
+            ruleset=make_ruleset(),
+            phase_name="challenge",
             **kwargs,  # type: ignore[arg-type]
         )
 

@@ -62,9 +62,7 @@ def simulate_challenge(  # noqa: PLR0913 — paramètres de simulation, un seul 
         raise ValueError("max_days must be positive")
     if n_paths <= 0:
         raise ValueError("n_paths must be positive")
-
-    phase = ruleset.phase(phase_name)
-    guard = daily_loss_guard if daily_loss_guard is not None and daily_loss_guard.enabled else None
+    ruleset.phase(phase_name)  # échoue tôt (KeyError) avant de rééchantillonner pour rien
 
     path_length = trades_per_day * max_days
     trade_paths = _resample_paths(
@@ -74,6 +72,56 @@ def simulate_challenge(  # noqa: PLR0913 — paramètres de simulation, un seul 
         path_length=path_length,
         rng=rng,
     )
+
+    return simulate_from_paths(
+        trade_paths,
+        ruleset=ruleset,
+        phase_name=phase_name,
+        risk_per_trade_pct=risk_per_trade_pct,
+        trades_per_day=trades_per_day,
+        max_days=max_days,
+        initial_balance=initial_balance,
+        daily_loss_guard=daily_loss_guard,
+    )
+
+
+def simulate_from_paths(  # noqa: PLR0913 — paramètres de simulation, transmis tels quels
+    trade_paths: NDArray[np.float64],
+    *,
+    ruleset: PropFirmRuleset,
+    phase_name: str,
+    risk_per_trade_pct: float,
+    trades_per_day: int,
+    max_days: int,
+    initial_balance: float = DEFAULT_INITIAL_BALANCE,
+    daily_loss_guard: DailyLossGuard | None = None,
+) -> PropSimResult:
+    """Exécute les règles du ruleset sur des trajectoires déjà rééchantillonnées.
+
+    Point d'entrée réutilisé par `edgelab.portfolio` : un portefeuille combine
+    plusieurs stratégies en une seule trajectoire de rendements agrégés
+    (rééchantillonnées avec des indices partagés pour préserver leur
+    corrélation, voir `portfolio/simulator.py`) puis la fait passer par
+    exactement la même mécanique jour par jour que `simulate_challenge`, sans
+    dupliquer la boucle de breach/passage.
+
+    Raises:
+        ValueError: si `trade_paths` est vide, ou si `risk_per_trade_pct`,
+            `trades_per_day` ou `max_days` ne sont pas strictement positifs.
+        KeyError: si `phase_name` ne correspond à aucun palier du ruleset.
+    """
+    if trade_paths.size == 0:
+        raise ValueError("trade_paths must not be empty")
+    if risk_per_trade_pct <= 0.0:
+        raise ValueError("risk_per_trade_pct must be positive")
+    if trades_per_day <= 0:
+        raise ValueError("trades_per_day must be positive")
+    if max_days <= 0:
+        raise ValueError("max_days must be positive")
+
+    phase = ruleset.phase(phase_name)
+    guard = daily_loss_guard if daily_loss_guard is not None and daily_loss_guard.enabled else None
+    n_paths = trade_paths.shape[0]
 
     n_pass = 0
     n_breach_daily = 0
