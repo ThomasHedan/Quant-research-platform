@@ -9,10 +9,12 @@ import type {
   CombinationResult,
   CorrelationMatrix,
   LeaderboardRow,
-  PapersStatus,
+  PaperRecord,
+  PromptResponse,
   RiskSurfaceResult,
   RulesetSummary,
   StrategyBundle,
+  TriageStatus,
   Trial,
   TrialLink,
 } from "./types"
@@ -29,6 +31,31 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * FastAPI renvoie `detail` en chaîne pour une `HTTPException` levée à la
+ * main, mais en liste d'objets `{loc, msg, type}` pour une 422 de validation
+ * Pydantic native — le cas attendu quand un JSON collé par l'utilisateur ne
+ * respecte pas le schéma. Les deux formes doivent rester lisibles.
+ */
+function extractErrorMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail
+    if (typeof detail === "string") return detail
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => {
+          if (item && typeof item === "object" && "msg" in item) {
+            const loc = "loc" in item && Array.isArray(item.loc) ? item.loc.join(".") : ""
+            return loc ? `${loc}: ${String(item.msg)}` : String(item.msg)
+          }
+          return String(item)
+        })
+        .join(" ; ")
+    }
+  }
+  return fallback
+}
+
 async function request<T>(path: string, params?: Record<string, string | string[]>): Promise<T> {
   const url = new URL(path, API_BASE)
   if (params) {
@@ -42,8 +69,32 @@ async function request<T>(path: string, params?: Record<string, string | string[
   }
   const response = await fetch(url)
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ detail: response.statusText }))
-    throw new ApiError(response.status, body.detail ?? response.statusText)
+    const body = await response.json().catch(() => null)
+    throw new ApiError(response.status, extractErrorMessage(body, response.statusText))
+  }
+  return response.json() as Promise<T>
+}
+
+/**
+ * POST/PATCH avec un corps JSON. `body` est délibérément `unknown` : les
+ * insertions du module papiers acceptent le JSON tel que collé par
+ * l'utilisateur, non re-validé côté front — c'est `edgelab.papers` (via
+ * l'API) qui porte la validation, jamais un schéma dupliqué ici.
+ */
+async function requestWithBody<T>(
+  path: string,
+  method: "POST" | "PATCH",
+  body: unknown,
+): Promise<T> {
+  const url = new URL(path, API_BASE)
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const responseBody = await response.json().catch(() => null)
+    throw new ApiError(response.status, extractErrorMessage(responseBody, response.statusText))
   }
   return response.json() as Promise<T>
 }
@@ -84,5 +135,21 @@ export const api = {
       ...(phase ? { phase } : {}),
     }),
 
-  getPapersStatus: () => request<PapersStatus>("/api/papers"),
+  listPapers: () => request<PaperRecord[]>("/api/papers"),
+  getPaper: (paperId: string) => request<PaperRecord>(`/api/papers/${encodeURIComponent(paperId)}`),
+  createPaper: (payload: unknown) => requestWithBody<PaperRecord>("/api/papers", "POST", payload),
+  getPaperAnalysisPrompt: () => request<PromptResponse>("/api/papers/prompt"),
+  getPaperHypothesisPrompt: (paperId: string) =>
+    request<PromptResponse>(`/api/papers/${encodeURIComponent(paperId)}/hypothesis-prompt`),
+  attachPaperHypothesis: (paperId: string, payload: unknown) =>
+    requestWithBody<PaperRecord>(
+      `/api/papers/${encodeURIComponent(paperId)}/hypothesis`,
+      "POST",
+      payload,
+    ),
+  setPaperStatus: (paperId: string, status: TriageStatus, reason?: string) =>
+    requestWithBody<PaperRecord>(`/api/papers/${encodeURIComponent(paperId)}/status`, "PATCH", {
+      status,
+      reason: reason ?? "",
+    }),
 }

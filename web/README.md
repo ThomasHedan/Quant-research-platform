@@ -1,6 +1,6 @@
 # edgelab-web
 
-Vue en lecture sur les artefacts produits par le CLI Python (`edgelab/api/` sert de pont FastAPI, sans logique métier). Aucun calcul ne doit vivre ici — cf. règle d'architecture dans `CLAUDE.md` §3. Les deux exceptions (explorateur de combinaisons, changement de ruleset sur la surface de risque) sont des déclencheurs de job documentés dans `edgelab/api/README.md` : ils délèguent entièrement à `edgelab.portfolio`/`edgelab.propsim`, jamais de calcul dupliqué côté web.
+Vue en lecture sur les artefacts produits par le CLI Python (`edgelab/api/` sert de pont FastAPI, sans logique métier). Aucun calcul ne doit vivre ici — cf. règle d'architecture dans `CLAUDE.md` §3. L'explorateur de combinaisons et le changement de ruleset sur la surface de risque sont des déclencheurs de job documentés dans `edgelab/api/README.md` : ils délèguent entièrement à `edgelab.portfolio`/`edgelab.propsim`, jamais de calcul dupliqué côté web. La bibliothèque de papiers (Phase 7) étend ce principe à l'écriture (créer une fiche, rattacher un brouillon d'hypothèse, changer un statut de triage) : le JSON collé par l'utilisateur n'est jamais re-validé côté front, c'est `edgelab.papers` (via l'API) qui porte seul la validation.
 
 Stack : React 19 + Vite + TypeScript + Tailwind v4 + shadcn/ui (style "new-york", `components.json` configuré, ajouter des composants avec `npx shadcn@latest add <name>`), TanStack Table pour les grilles, Recharts pour les graphiques, react-router-dom pour le routage.
 
@@ -30,11 +30,12 @@ Un vrai bug d'accessibilité a été trouvé et corrigé pendant ce retravail : 
 - `src/lib/derived.ts` — miroir des `@property` Python non sérialisées par Pydantic (`any_triggered`, `delta`, `edge_contribution_p_pass`, `best_point`, `n_windows`, `correlation()`) : toute vue qui a besoin de l'une de ces valeurs importe la fonction correspondante plutôt que de la recalculer à sa façon.
 - `src/components/` — coquille (`AppShell`), élément signature (`KillCard`), primitives d'affichage (`StatCell`, `StatusBadge`, `DataState`), composants shadcn/ui de base sous `ui/`.
 - `src/pages/` — les six vues (`Leaderboard`, `StrategyDetail`, `RiskSurfacePage`, `PortfolioExplorer`, `PapersLibrary`, `TrialLog`), routées dans `App.tsx`.
+- `src/pages/papers/` — sous-composants de `PapersLibrary` : `PaperIntakeCard` (prompt + insertion JSON pour créer une fiche), `HypothesisIntake`/`HypothesisDraftView` (idem pour le brouillon d'hypothèse, ou son affichage une fois rattaché), `StatusChanger` (triage manuel, `mort` exige un motif), `CopyPromptButton` (presse-papiers).
 
 ## Ce que ce module refuse de faire
 
-Recalculer une statistique ou une simulation déjà produite par `edgelab.*` (Python). Afficher une moyenne sans son intervalle de confiance. Utiliser le vert pour "rentable". Masquer qu'une vue (papiers, Phase 7) n'est pas construite derrière un état vide silencieux.
+Recalculer une statistique ou une simulation déjà produite par `edgelab.*` (Python). Afficher une moyenne sans son intervalle de confiance. Utiliser le vert pour "rentable". Coder en dur le texte d'un prompt (source unique : `edgelab.papers.prompts`, servie par l'API). Écrire du code de stratégie exécutable ou déclencher un backtest depuis la bibliothèque de papiers.
 
 ## Statut
 
-Phase 8 livrée : les six vues sont branchées sur l'API réelle, vérifiées en exécution (build + lint propres, six routes rendues sans erreur console, mode sombre et clavier vérifiés).
+Phase 8 livrée : les six vues sont branchées sur l'API réelle, vérifiées en exécution (build + lint propres, six routes rendues sans erreur console, mode sombre et clavier vérifiés). Phase 7 (papiers) livrée : flux complet copier-le-prompt -> coller-le-JSON pour la fiche papier et pour le brouillon d'hypothèse, filtres langue/famille/classe d'actifs, tri par testabilité, triage manuel — vérifié en exécution de bout en bout (Playwright, clair/sombre/mobile).

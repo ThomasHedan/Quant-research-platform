@@ -2,12 +2,20 @@
 
 Ce module ne calcule jamais un résultat statistique ou de simulation : il lit
 des fichiers JSON déjà produits (`edgelab/api/seed_data/`, voir
-`scripts/seed_demo_strategies.py`) et le registre SQLite réel. Les deux
-exceptions — `run_combination` et `run_risk_surface` — délèguent entièrement
-à `edgelab.portfolio` / `edgelab.propsim` : ce sont des déclencheurs de job
-(le README de l'API les autorise explicitement), pas de la logique métier
-propre à l'API, puisqu'aucune décision n'y est prise et qu'aucun calcul n'y
-est dupliqué.
+`scripts/seed_demo_strategies.py`) et le registre SQLite réel. Les
+exceptions — `run_combination`, `run_risk_surface`, etc. — délèguent
+entièrement à `edgelab.portfolio` / `edgelab.propsim` : ce sont des
+déclencheurs de job (le README de l'API les autorise explicitement), pas de
+la logique métier propre à l'API, puisqu'aucune décision n'y est prise et
+qu'aucun calcul n'y est dupliqué.
+
+Les fonctions `create_paper`/`attach_paper_hypothesis`/`set_paper_status`
+(Phase 7) étendent ce principe à l'écriture : elles marshallent une requête
+HTTP vers `edgelab.papers.PaperRepository`, qui porte seul la validation
+(y compris la règle de falsifiabilité I2, réutilisée depuis
+`edgelab.strategies.models.HypothesisSheet`). Rien ici ne décide quoi que
+ce soit ; rien n'écrit dans `edgelab/strategies/` ni ne déclenche de
+backtest — voir `edgelab/papers/README.md`.
 """
 
 from __future__ import annotations
@@ -21,8 +29,16 @@ from pathlib import Path
 import numpy as np
 
 from edgelab.api.schemas import LeaderboardRow, StrategyBundle
-from edgelab.config import DEFAULT_LOCKBOX_DB, DEFAULT_REGISTRY_DB
+from edgelab.config import DEFAULT_LOCKBOX_DB, DEFAULT_PAPERS_DB, DEFAULT_REGISTRY_DB
 from edgelab.data.lockbox import HoldoutLockbox
+from edgelab.papers.models import HypothesisDraftRequest, PaperAnalysisRequest, TriageStatus
+from edgelab.papers.prompts import PAPER_ANALYSIS_PROMPT, hypothesis_draft_prompt_for
+from edgelab.papers.repository import (
+    PaperNotFoundError,
+    PaperRecord,
+    PaperRepository,
+    PaperRepositoryError,
+)
 from edgelab.portfolio.combination import explore_combination, optimize_allocation
 from edgelab.portfolio.correlation import correlation_matrix_by_trade
 from edgelab.portfolio.models import AllocationSearchResult, CombinationResult, CorrelationMatrix
@@ -37,21 +53,31 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_LOCKBOX_DB",
+    "DEFAULT_PAPERS_DB",
     "DEFAULT_REGISTRY_DB",
     "SEED_DATA_DIR",
+    "PaperNotFoundError",
+    "PaperRepositoryError",
     "StrategyNotFoundError",
+    "attach_paper_hypothesis",
+    "create_paper",
     "get_bundle",
+    "get_paper",
     "get_ruleset",
     "holdout_access_count",
     "leaderboard_rows",
     "list_bundles",
+    "list_papers",
     "list_rulesets",
+    "paper_analysis_prompt",
+    "paper_hypothesis_prompt",
     "registry_trial_count",
     "registry_trials",
     "run_combination",
     "run_correlation",
     "run_optimize_allocation",
     "run_risk_surface",
+    "set_paper_status",
 ]
 """`DEFAULT_REGISTRY_DB`/`DEFAULT_LOCKBOX_DB` sont réexportés délibérément : les tests
 monkeypatchent `store.DEFAULT_REGISTRY_DB` pour isoler chaque cas sur un registre
@@ -309,6 +335,72 @@ def _aligned_returns(bundles: dict[str, StrategyBundle]) -> dict[str, np.ndarray
         sid: np.asarray(b.trade_r_multiples[:min_len], dtype=np.float64)
         for sid, b in bundles.items()
     }
+
+
+def list_papers() -> list[PaperRecord]:
+    """Papiers connus, du plus récemment mis à jour au plus ancien (Phase 7)."""
+    with PaperRepository(DEFAULT_PAPERS_DB) as repo:
+        return repo.list_papers()
+
+
+def get_paper(paper_id: str) -> PaperRecord:
+    """Un papier par identifiant.
+
+    Raises:
+        PaperNotFoundError: si `paper_id` est inconnu.
+    """
+    with PaperRepository(DEFAULT_PAPERS_DB) as repo:
+        record = repo.get(paper_id)
+    if record is None:
+        raise PaperNotFoundError(f"paper '{paper_id}' introuvable")
+    return record
+
+
+def create_paper(request: PaperAnalysisRequest) -> PaperRecord:
+    """Crée une fiche papier depuis le JSON collé (déclencheur d'écriture, Phase 7).
+
+    Toute la validation vit dans `edgelab.papers` (`PaperAnalysisRequest`,
+    `PaperSheet`) — cette fonction ne fait que marshaller la requête HTTP
+    vers le repository réel.
+    """
+    with PaperRepository(DEFAULT_PAPERS_DB) as repo:
+        return repo.create(request)
+
+
+def attach_paper_hypothesis(paper_id: str, request: HypothesisDraftRequest) -> PaperRecord:
+    """Rattache un brouillon d'hypothèse à un papier (déclencheur d'écriture, Phase 7).
+
+    Raises:
+        PaperNotFoundError: si `paper_id` est inconnu.
+        pydantic.ValidationError: si l'hypothèse n'est pas falsifiable (I2).
+    """
+    with PaperRepository(DEFAULT_PAPERS_DB) as repo:
+        return repo.attach_hypothesis(paper_id, request)
+
+
+def set_paper_status(paper_id: str, status: TriageStatus, reason: str = "") -> PaperRecord:
+    """Déplace un papier dans la file de triage (déclencheur d'écriture, Phase 7).
+
+    Raises:
+        PaperNotFoundError: si `paper_id` est inconnu.
+        PaperRepositoryError: si `status` est `mort` sans motif écrit.
+    """
+    with PaperRepository(DEFAULT_PAPERS_DB) as repo:
+        return repo.set_status(paper_id, status, reason)
+
+
+def paper_analysis_prompt() -> str:
+    """Le prompt copiable statique « Analyse de papier de recherche »."""
+    return PAPER_ANALYSIS_PROMPT
+
+
+def paper_hypothesis_prompt(paper_id: str) -> str:
+    """Le prompt copiable « Générer une hypothèse falsifiable », personnalisé au papier.
+
+    Raises:
+        PaperNotFoundError: si `paper_id` est inconnu.
+    """
+    return hypothesis_draft_prompt_for(get_paper(paper_id).sheet)
 
 
 def _write_bundle(bundle: StrategyBundle) -> None:

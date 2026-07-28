@@ -1,7 +1,13 @@
 # edgelab.papers
 
-**Rôle.** Ingestion et triage de littérature multilingue, score de testabilité, période post-publication testable.
+**Rôle.** Fiche papier structurée, score de testabilité et file de triage (Phase 7). L'extraction PDF -> fiche et la traduction multilingue ne sont pas construites en interne dans ce premier jet : elles sont déléguées à une IA généraliste via un prompt copiable (`prompts.py`), et l'utilisateur colle le JSON renvoyé, qui est validé par les mêmes modèles Pydantic que le CLI et l'API utilisent (`PaperAnalysisRequest`, `HypothesisDraftRequest`).
 
-**Ce module refuse de faire.** Redistribuer le texte intégral d'un papier, rejeter un papier non anglophone.
+**Décision de design.** Le brouillon d'hypothèse (`HypothesisDraft`) réutilise `edgelab.strategies.models.HypothesisSheet` tel quel plutôt que de dupliquer la règle de falsifiabilité (I2, `where_it_should_not_work` non vide). Rien dans ce module n'écrit dans `edgelab/strategies/` ni ne déclenche de backtest : faire d'un brouillon une stratégie testable, gatée par I2 et lançable, reste une action CLI distincte et volontaire, non construite ici (voir `edgelab/strategies/README.md`).
 
-**Statut.** Squelette — implémentation à venir selon l'ordre de phase défini dans `CLAUDE.md`.
+**Score de testabilité.** Calculé, pas subjectif (`testability.py`) : quatre composantes booléennes/graduées (instrument disponible chez les prop firms, données accessibles, mécanisable sans discrétion, coûts déjà intégrés) plus le facteur le plus important — les années de données post-publication disponibles (McLean & Pontiff 2016) — qui compte double et plafonne à 10 ans. Le score d'un papier progresse naturellement avec le temps qui passe, sans qu'aucune donnée sur ce papier n'ait changé ; c'est le comportement voulu.
+
+**Ce que ce module refuse de faire.** Redistribuer le texte intégral d'un papier (seules des métadonnées courtes et des notes personnelles sont stockées). Rejeter un papier non anglophone. Faire confiance aveuglément aux estimations booléennes de testabilité fournies par l'IA d'extraction — elles sont présentées comme des estimations à vérifier, jamais comme des faits mesurés. Écrire du code de stratégie exécutable ou lancer un backtest depuis une fiche ou un brouillon d'hypothèse collés.
+
+**Limite connue.** L'état de triage `a_lire` (un papier repéré mais pas encore dépouillé) existe dans `TriageStatus` pour la complétude de la spec, mais rien dans ce premier jet n'y place de papier : le flux implémenté part toujours d'une fiche déjà extraite, donc un papier créé atterrit directement en `fiche_faite`.
+
+**Statut.** Phase 7 (premier jet) : `PaperSheet`, `TestabilityInputs`, `HypothesisDraft`, `PaperRepository` (SQLite, mutable — contrairement au registre d'essais ou au journal holdout, la file de triage n'est pas append-only), prompts copiables, commandes CLI `edgelab paper add/list/show/hypothesis/set-status`, endpoints API en lecture + déclencheurs de création/mise à jour.

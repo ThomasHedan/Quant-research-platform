@@ -159,12 +159,3 @@ class StrategyBundle(BaseModel):
     ruleset_name: str
     holdout_access_count: int
     holdout_flagged: bool
-
-
-class PapersStatus(BaseModel):
-    """Statut honnête du module papiers : Phase 7 n'est pas encore livrée."""
-
-    model_config = ConfigDict(frozen=True)
-
-    implemented: bool
-    message: str

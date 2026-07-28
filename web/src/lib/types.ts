@@ -289,7 +289,60 @@ export interface AllocationSearchResult {
   n_candidates_evaluated: number
 }
 
-export interface PapersStatus {
-  implemented: boolean
-  message: string
+export type TriageStatus =
+  | "a_lire"
+  | "fiche_faite"
+  | "hypothese_ecrite"
+  | "en_test"
+  | "mort"
+  | "valide"
+
+export type CostsConsidered = "oui" | "non" | "partiel"
+export type ReplicationDifficulty = "faible" | "moyenne" | "elevee"
+
+export interface TestabilityInputs {
+  instrument_available_at_prop_firms: boolean
+  data_accessible: boolean
+  mechanizable_without_discretion: boolean
+}
+
+export interface PaperSheet {
+  id: string
+  title: string
+  authors: string[]
+  publication_year: number
+  language_source: string
+  venue: string
+  anomaly_family: string
+  asset_class: string
+  frequency: string
+  sample_period: string
+  claimed_sharpe_or_hit_rate: string
+  costs_considered: CostsConsidered
+  economic_hypothesis: string
+  data_needed: string
+  replication_difficulty: ReplicationDifficulty
+  testability_inputs: TestabilityInputs
+  personal_notes: string
+  source_url_or_doi: string
+  created_at: string
+}
+
+export interface HypothesisDraft {
+  paper_id: string
+  hypothesis: HypothesisSheet
+  strategy_code_skeleton: string
+  created_at: string
+}
+
+export interface PaperRecord {
+  sheet: PaperSheet
+  status: TriageStatus
+  dead_reason: string
+  hypothesis_draft: HypothesisDraft | null
+  testability_score: number
+}
+
+export interface PromptResponse {
+  prompt: string
 }

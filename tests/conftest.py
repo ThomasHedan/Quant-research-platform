@@ -22,6 +22,8 @@ from edgelab.costs.models import CostModel, FixedSpreadCost, SlippageByOrderType
 from edgelab.data.lockbox import HoldoutLockbox
 from edgelab.data.manifest import DatasetPartition
 from edgelab.data.store import DatasetStore
+from edgelab.papers.models import HypothesisDraftRequest, KillCriterionInput, PaperAnalysisRequest
+from edgelab.papers.repository import PaperRepository
 from edgelab.propsim.models import ChallengePhase, DrawdownBasis, DrawdownType, PropFirmRuleset
 from edgelab.registry.models import Trial, TrialType
 from edgelab.registry.repository import TrialRepository
@@ -445,5 +447,76 @@ def make_strategy_bundle(
             holdout_access_count=0,
             holdout_flagged=False,
         )
+
+    return _make
+
+
+@pytest.fixture
+def papers_db_path(tmp_path: Path) -> Path:
+    """Chemin d'un stockage papiers SQLite isolé pour un test."""
+    return tmp_path / "papers.sqlite3"
+
+
+@pytest.fixture
+def paper_repository(papers_db_path: Path) -> Iterator[PaperRepository]:
+    """Un `PaperRepository` adossé à un fichier SQLite temporaire."""
+    with PaperRepository(papers_db_path) as repo:
+        yield repo
+
+
+@pytest.fixture
+def make_paper_analysis_request() -> Callable[..., PaperAnalysisRequest]:
+    """Factory produisant un `PaperAnalysisRequest` valide, personnalisable via overrides."""
+
+    def _make(**overrides: Any) -> PaperAnalysisRequest:
+        defaults: dict[str, Any] = {
+            "title": "Momentum Crashes in Chinese Commodity Futures",
+            "authors": ("Wei Zhang", "Li Chen"),
+            "publication_year": 2016,
+            "language_source": "zh",
+            "venue": "Journal of Futures Markets",
+            "anomaly_family": "momentum",
+            "asset_class": "futures matières premières",
+            "frequency": "quotidien",
+            "sample_period": "2005-2014",
+            "claimed_sharpe_or_hit_rate": "Sharpe 1.2 sur le portefeuille long-short",
+            "costs_considered": "partiel",
+            "economic_hypothesis": "Les futures chinoises sous-réagissent au flux d'ordre.",
+            "data_needed": "Prix quotidiens Dalian et Shanghai Futures Exchange",
+            "replication_difficulty": "moyenne",
+            "instrument_available_at_prop_firms": False,
+            "data_accessible": True,
+            "mechanizable_without_discretion": True,
+        }
+        defaults.update(overrides)
+        return PaperAnalysisRequest(**defaults)
+
+    return _make
+
+
+@pytest.fixture
+def make_hypothesis_draft_request() -> Callable[..., HypothesisDraftRequest]:
+    """Factory produisant un `HypothesisDraftRequest` valide, personnalisable via overrides."""
+
+    def _make(**overrides: Any) -> HypothesisDraftRequest:
+        defaults: dict[str, Any] = {
+            "economic_hypothesis": "Un signal de flux d'ordre à 5 jours prédit une continuation.",
+            "predicted_direction": "long",
+            "predicted_amplitude_atr": 0.4,
+            "predicted_hit_rate": 0.53,
+            "predicted_horizon_bars": 10,
+            "where_it_should_not_work": "Hors des trois contrats les plus liquides.",
+            "kill_criteria": (
+                KillCriterionInput(
+                    name="edge non significatif",
+                    metric="t_stat",
+                    comparison="less_than",
+                    threshold=2.0,
+                ),
+            ),
+            "strategy_code_skeleton": "def signal(bar_window):\n    return False\n",
+        }
+        defaults.update(overrides)
+        return HypothesisDraftRequest(**defaults)
 
     return _make

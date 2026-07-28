@@ -10,16 +10,18 @@ import numpy as np
 import pytest
 from edgelab.api import store
 from edgelab.data.lockbox import HoldoutLockbox
+from edgelab.papers.models import TriageStatus
 from edgelab.registry.models import Trial
 from edgelab.registry.repository import TrialRepository
 
 
 @pytest.fixture(autouse=True)
 def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Isole chaque test : répertoire de bundles, registre et lockbox dédiés, cache vidé."""
+    """Isole chaque test : répertoire de bundles, registre, lockbox et papiers dédiés."""
     monkeypatch.setattr(store, "SEED_DATA_DIR", tmp_path / "strategies")
     monkeypatch.setattr(store, "DEFAULT_REGISTRY_DB", tmp_path / "registry.sqlite3")
     monkeypatch.setattr(store, "DEFAULT_LOCKBOX_DB", tmp_path / "lockbox.sqlite3")
+    monkeypatch.setattr(store, "DEFAULT_PAPERS_DB", tmp_path / "papers.sqlite3")
     store._load_all_bundles.cache_clear()
     store._shipped_rulesets.cache_clear()
     yield
@@ -143,3 +145,69 @@ def test_run_risk_surface_recomputes_for_a_chosen_ruleset(
     result = store.run_risk_surface("a", "topstep")
 
     assert len(result.points) > 0
+
+
+def test_list_papers_is_empty_on_a_fresh_store() -> None:
+    """Aucun papier créé : liste vide, pas d'erreur."""
+    assert store.list_papers() == []
+
+
+def test_create_paper_then_list_papers_roundtrips(
+    make_paper_analysis_request: Callable[..., Any],
+) -> None:
+    """Un papier créé via le déclencheur d'écriture apparaît dans la liste."""
+    store.create_paper(make_paper_analysis_request(title="Titre API"))
+
+    records = store.list_papers()
+
+    assert [r.sheet.title for r in records] == ["Titre API"]
+
+
+def test_get_paper_raises_for_an_unknown_id() -> None:
+    """`get_paper` échoue explicitement plutôt que de renvoyer `None` en silence."""
+    with pytest.raises(store.PaperNotFoundError):
+        store.get_paper("does-not-exist")
+
+
+def test_attach_paper_hypothesis_advances_status(
+    make_paper_analysis_request: Callable[..., Any],
+    make_hypothesis_draft_request: Callable[..., Any],
+) -> None:
+    """Rattacher un brouillon d'hypothèse fait avancer le statut de triage."""
+    created = store.create_paper(make_paper_analysis_request())
+
+    updated = store.attach_paper_hypothesis(created.sheet.id, make_hypothesis_draft_request())
+
+    assert updated.status.value == "hypothese_ecrite"
+
+
+def test_set_paper_status_mort_without_reason_raises(
+    make_paper_analysis_request: Callable[..., Any],
+) -> None:
+    """Le déclencheur d'écriture porte la même règle que le repository : motif obligatoire."""
+    created = store.create_paper(make_paper_analysis_request())
+
+    with pytest.raises(store.PaperRepositoryError):
+        store.set_paper_status(created.sheet.id, TriageStatus.MORT)
+
+
+def test_paper_analysis_prompt_mentions_the_json_contract() -> None:
+    """Le prompt statique documente le schéma JSON attendu."""
+    assert "language_source" in store.paper_analysis_prompt()
+
+
+def test_paper_hypothesis_prompt_embeds_the_paper_title(
+    make_paper_analysis_request: Callable[..., Any],
+) -> None:
+    """Le prompt personnalisé embarque la fiche du papier concerné."""
+    created = store.create_paper(make_paper_analysis_request(title="Titre Unique Prompt"))
+
+    prompt = store.paper_hypothesis_prompt(created.sheet.id)
+
+    assert "Titre Unique Prompt" in prompt
+
+
+def test_paper_hypothesis_prompt_raises_for_an_unknown_paper() -> None:
+    """Demander un prompt pour un papier inconnu échoue explicitement."""
+    with pytest.raises(store.PaperNotFoundError):
+        store.paper_hypothesis_prompt("does-not-exist")

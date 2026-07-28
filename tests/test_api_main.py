@@ -17,10 +17,11 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(autouse=True)
 def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Isole chaque test : répertoire de bundles, registre et lockbox dédiés, cache vidé."""
+    """Isole chaque test : répertoire de bundles, registre, lockbox et papiers dédiés."""
     monkeypatch.setattr(store, "SEED_DATA_DIR", tmp_path / "strategies")
     monkeypatch.setattr(store, "DEFAULT_REGISTRY_DB", tmp_path / "registry.sqlite3")
     monkeypatch.setattr(store, "DEFAULT_LOCKBOX_DB", tmp_path / "lockbox.sqlite3")
+    monkeypatch.setattr(store, "DEFAULT_PAPERS_DB", tmp_path / "papers.sqlite3")
     store._load_all_bundles.cache_clear()
     yield
     store._load_all_bundles.cache_clear()
@@ -231,9 +232,146 @@ def test_portfolio_optimize_404s_for_an_unknown_strategy(client: TestClient) -> 
     assert response.status_code == 404
 
 
-def test_papers_status_is_explicit_about_phase_7_being_unbuilt(client: TestClient) -> None:
-    """La vue papiers dit honnêtement qu'elle n'est pas livrée, jamais un placeholder silencieux."""
-    body = client.get("/api/papers").json()
+def test_list_papers_is_empty_on_a_fresh_store(client: TestClient) -> None:
+    """Aucun papier créé : liste vide, jamais un placeholder inventé."""
+    response = client.get("/api/papers")
 
-    assert body["implemented"] is False
-    assert "Phase 7" in body["message"]
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_create_paper_then_get_it_roundtrips(
+    client: TestClient, make_paper_analysis_request: Callable[..., Any]
+) -> None:
+    """Un papier créé via `POST /api/papers` est relisible via `GET /api/papers/{id}`."""
+    payload = make_paper_analysis_request(title="Titre API HTTP").model_dump(mode="json")
+
+    create_response = client.post("/api/papers", json=payload)
+
+    assert create_response.status_code == 200
+    paper_id = create_response.json()["sheet"]["id"]
+
+    get_response = client.get(f"/api/papers/{paper_id}")
+    assert get_response.status_code == 200
+    assert get_response.json()["sheet"]["title"] == "Titre API HTTP"
+    assert get_response.json()["status"] == "fiche_faite"
+
+
+def test_create_paper_rejects_an_invalid_payload(client: TestClient) -> None:
+    """Un JSON qui ne respecte pas le schéma renvoie 422, la validation FastAPI standard."""
+    response = client.post("/api/papers", json={"title": ""})
+
+    assert response.status_code == 422
+
+
+def test_get_paper_404s_for_an_unknown_id(client: TestClient) -> None:
+    """Un papier inconnu renvoie 404, jamais un enregistrement vide silencieux."""
+    response = client.get("/api/papers/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_get_paper_analysis_prompt_is_not_captured_by_the_paper_id_route(
+    client: TestClient,
+) -> None:
+    """`/api/papers/prompt` renvoie le prompt statique, pas un 404 pour `paper_id='prompt'`."""
+    response = client.get("/api/papers/prompt")
+
+    assert response.status_code == 200
+    assert "language_source" in response.json()["prompt"]
+
+
+def test_get_paper_hypothesis_prompt_embeds_the_paper_fiche(
+    client: TestClient, make_paper_analysis_request: Callable[..., Any]
+) -> None:
+    """Le prompt personnalisé embarque la fiche du papier concerné."""
+    payload = make_paper_analysis_request(title="Titre Prompt HTTP").model_dump(mode="json")
+    paper_id = client.post("/api/papers", json=payload).json()["sheet"]["id"]
+
+    response = client.get(f"/api/papers/{paper_id}/hypothesis-prompt")
+
+    assert response.status_code == 200
+    assert "Titre Prompt HTTP" in response.json()["prompt"]
+
+
+def test_get_paper_hypothesis_prompt_404s_for_an_unknown_id(client: TestClient) -> None:
+    """Demander le prompt d'un papier inconnu renvoie 404."""
+    response = client.get("/api/papers/does-not-exist/hypothesis-prompt")
+
+    assert response.status_code == 404
+
+
+def test_add_paper_hypothesis_advances_the_triage_status(
+    client: TestClient,
+    make_paper_analysis_request: Callable[..., Any],
+    make_hypothesis_draft_request: Callable[..., Any],
+) -> None:
+    """Rattacher un brouillon valide fait avancer le papier à `hypothese_ecrite`."""
+    paper_payload = make_paper_analysis_request().model_dump(mode="json")
+    paper_id = client.post("/api/papers", json=paper_payload).json()["sheet"]["id"]
+    hypothesis_payload = make_hypothesis_draft_request().model_dump(mode="json")
+
+    response = client.post(f"/api/papers/{paper_id}/hypothesis", json=hypothesis_payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "hypothese_ecrite"
+
+
+def test_add_paper_hypothesis_400s_when_unfalsifiable(
+    client: TestClient,
+    make_paper_analysis_request: Callable[..., Any],
+    make_hypothesis_draft_request: Callable[..., Any],
+) -> None:
+    """I2 : un brouillon dont `where_it_should_not_work` est vide renvoie 400, pas un 500."""
+    paper_payload = make_paper_analysis_request().model_dump(mode="json")
+    paper_id = client.post("/api/papers", json=paper_payload).json()["sheet"]["id"]
+    unfalsifiable = make_hypothesis_draft_request(where_it_should_not_work="").model_dump(
+        mode="json"
+    )
+
+    response = client.post(f"/api/papers/{paper_id}/hypothesis", json=unfalsifiable)
+
+    assert response.status_code == 400
+
+
+def test_add_paper_hypothesis_404s_for_an_unknown_paper(
+    client: TestClient, make_hypothesis_draft_request: Callable[..., Any]
+) -> None:
+    """Rattacher un brouillon à un papier inconnu renvoie 404."""
+    payload = make_hypothesis_draft_request().model_dump(mode="json")
+
+    response = client.post("/api/papers/does-not-exist/hypothesis", json=payload)
+
+    assert response.status_code == 404
+
+
+def test_update_paper_status_moves_the_paper(
+    client: TestClient, make_paper_analysis_request: Callable[..., Any]
+) -> None:
+    """`PATCH .../status` déplace le papier dans la file de triage."""
+    payload = make_paper_analysis_request().model_dump(mode="json")
+    paper_id = client.post("/api/papers", json=payload).json()["sheet"]["id"]
+
+    response = client.patch(f"/api/papers/{paper_id}/status", json={"status": "en_test"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "en_test"
+
+
+def test_update_paper_status_mort_without_reason_400s(
+    client: TestClient, make_paper_analysis_request: Callable[..., Any]
+) -> None:
+    """`mort` sans motif écrit renvoie 400 — le motif de mort doit rester conservé."""
+    payload = make_paper_analysis_request().model_dump(mode="json")
+    paper_id = client.post("/api/papers", json=payload).json()["sheet"]["id"]
+
+    response = client.patch(f"/api/papers/{paper_id}/status", json={"status": "mort"})
+
+    assert response.status_code == 400
+
+
+def test_update_paper_status_404s_for_an_unknown_paper(client: TestClient) -> None:
+    """Changer le statut d'un papier inconnu renvoie 404."""
+    response = client.patch("/api/papers/does-not-exist/status", json={"status": "en_test"})
+
+    assert response.status_code == 404

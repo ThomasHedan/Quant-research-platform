@@ -12,9 +12,12 @@ from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ValidationError
 
 from edgelab.api import store
-from edgelab.api.schemas import LeaderboardRow, PapersStatus, StrategyBundle, TrialLink
+from edgelab.api.schemas import LeaderboardRow, StrategyBundle, TrialLink
+from edgelab.papers.models import HypothesisDraftRequest, PaperAnalysisRequest, TriageStatus
+from edgelab.papers.repository import PaperNotFoundError, PaperRecord, PaperRepositoryError
 from edgelab.portfolio.models import AllocationSearchResult, CombinationResult, CorrelationMatrix
 from edgelab.propsim.models import RiskSurfaceResult
 from edgelab.registry.models import Trial
@@ -30,7 +33,7 @@ _MIN_STRATEGIES_FOR_CORRELATION = 2
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["*"],
 )
 
@@ -167,13 +170,75 @@ def get_optimal_allocation(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/papers", response_model=PapersStatus)
-def get_papers_status() -> PapersStatus:
-    """Statut du module papiers. Phase 7 n'est pas livrée : dit explicitement, jamais masqué."""
-    return PapersStatus(
-        implemented=False,
-        message=(
-            "Phase 7 (module papiers) n'est pas encore livrée. "
-            "Cette vue attend l'ingestion PDF et la fiche papier multilingue."
-        ),
-    )
+class PaperStatusUpdate(BaseModel):
+    """Corps de `PATCH /api/papers/{paper_id}/status`."""
+
+    status: TriageStatus
+    reason: str = ""
+
+
+class PromptResponse(BaseModel):
+    """Un prompt copiable, encapsulé en JSON."""
+
+    prompt: str
+
+
+@app.get("/api/papers", response_model=list[PaperRecord])
+def list_papers() -> list[PaperRecord]:
+    """Papiers connus (Phase 7), du plus récemment mis à jour au plus ancien."""
+    return store.list_papers()
+
+
+@app.post("/api/papers", response_model=PaperRecord)
+def create_paper(request: PaperAnalysisRequest) -> PaperRecord:
+    """Crée une fiche papier depuis le JSON collé par l'utilisateur (déclencheur d'écriture)."""
+    return store.create_paper(request)
+
+
+# Doit être déclaré avant `/api/papers/{paper_id}` : sinon Starlette router
+# le chemin littéral "prompt" comme une valeur de `paper_id` (même forme de
+# route, premier enregistré gagne).
+@app.get("/api/papers/prompt", response_model=PromptResponse)
+def get_paper_analysis_prompt() -> PromptResponse:
+    """Prompt copiable statique « Analyse de papier de recherche »."""
+    return PromptResponse(prompt=store.paper_analysis_prompt())
+
+
+@app.get("/api/papers/{paper_id}", response_model=PaperRecord)
+def get_paper(paper_id: str) -> PaperRecord:
+    """Un papier complet, brouillon d'hypothèse inclus s'il existe."""
+    try:
+        return store.get_paper(paper_id)
+    except PaperNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/papers/{paper_id}/hypothesis-prompt", response_model=PromptResponse)
+def get_paper_hypothesis_prompt(paper_id: str) -> PromptResponse:
+    """Prompt copiable « Générer une hypothèse falsifiable », personnalisé au papier."""
+    try:
+        return PromptResponse(prompt=store.paper_hypothesis_prompt(paper_id))
+    except PaperNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/papers/{paper_id}/hypothesis", response_model=PaperRecord)
+def add_paper_hypothesis(paper_id: str, request: HypothesisDraftRequest) -> PaperRecord:
+    """Rattache un brouillon d'hypothèse (I2) au papier."""
+    try:
+        return store.attach_paper_hypothesis(paper_id, request)
+    except PaperNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/papers/{paper_id}/status", response_model=PaperRecord)
+def update_paper_status(paper_id: str, body: PaperStatusUpdate) -> PaperRecord:
+    """Déplace un papier dans la file de triage (`mort` exige un motif écrit)."""
+    try:
+        return store.set_paper_status(paper_id, body.status, body.reason)
+    except PaperNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PaperRepositoryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

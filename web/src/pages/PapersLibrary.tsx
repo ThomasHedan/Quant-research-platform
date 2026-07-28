@@ -1,73 +1,147 @@
+import { useMemo, useState } from "react"
 import { api } from "@/lib/api"
 import { useApi } from "@/hooks/useApi"
 import { ErrorState, LoadingState } from "@/components/DataState"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { PaperCard } from "@/pages/papers/PaperCard"
+import { PaperIntakeCard } from "@/pages/papers/PaperIntakeCard"
 
-const TRIAGE_STAGES = ["à lire", "fiche faite", "hypothèse écrite", "en test", "mort / validé"]
+const ALL_VALUE = "__all__"
 
+function distinctSorted(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Bibliothèque de papiers (Phase 7). Le pipeline papier -> hypothèse
+ * s'arrête volontairement à un brouillon d'hypothèse falsifiable (I2) :
+ * transformer ce brouillon en stratégie réellement testable et lancer un
+ * backtest reste une action CLI distincte, non construite ici — voir
+ * `edgelab/papers/README.md`.
+ */
 export function PapersLibrary() {
-  const { data, error, loading } = useApi(() => api.getPapersStatus(), [])
+  const [refreshKey, setRefreshKey] = useState(0)
+  const papers = useApi(() => api.listPapers(), [refreshKey])
+  const refresh = () => setRefreshKey((k) => k + 1)
+
+  const [language, setLanguage] = useState(ALL_VALUE)
+  const [family, setFamily] = useState(ALL_VALUE)
+  const [assetClass, setAssetClass] = useState(ALL_VALUE)
+  const [sortByTestability, setSortByTestability] = useState(false)
+
+  const records = useMemo(() => papers.data ?? [], [papers.data])
+
+  const languages = useMemo(
+    () => distinctSorted(records.map((r) => r.sheet.language_source)),
+    [records],
+  )
+  const families = useMemo(
+    () => distinctSorted(records.map((r) => r.sheet.anomaly_family)),
+    [records],
+  )
+  const assetClasses = useMemo(
+    () => distinctSorted(records.map((r) => r.sheet.asset_class)),
+    [records],
+  )
+
+  const filtered = useMemo(() => {
+    let rows = records.filter(
+      (r) =>
+        (language === ALL_VALUE || r.sheet.language_source === language) &&
+        (family === ALL_VALUE || r.sheet.anomaly_family === family) &&
+        (assetClass === ALL_VALUE || r.sheet.asset_class === assetClass),
+    )
+    if (sortByTestability) {
+      rows = [...rows].sort((a, b) => b.testability_score - a.testability_score)
+    }
+    return rows
+  }, [records, language, family, assetClass, sortByTestability])
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-lg font-semibold tracking-tight">Bibliothèque de papiers</h1>
-        <p className="text-sm text-muted-foreground">
-          Ingestion PDF, fiche papier multilingue, score de testabilité, file de triage.
+        <p className="text-sm text-muted-foreground max-w-[70ch]">
+          Ingestion déléguée à une IA externe via des prompts copiables (pas d'extraction PDF ni
+          de traduction construites en interne dans ce premier jet), score de testabilité, file de
+          triage. Le texte intégral d'un papier n'est jamais stocké.
         </p>
       </div>
 
-      {loading && <LoadingState />}
-      {error && <ErrorState error={error} />}
+      <PaperIntakeCard onCreated={refresh} />
 
-      {data && (
-        <Card className="rounded-none border-destructive/60">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <span aria-hidden="true">&#9888;</span>
-              Module non construit
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-destructive">{data.message}</p>
-          </CardContent>
-        </Card>
-      )}
+      {papers.loading && <LoadingState />}
+      {papers.error && <ErrorState error={papers.error} />}
 
-      <Card className="rounded-none">
-        <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            File de triage prévue — à venir, non fonctionnelle
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap items-center gap-2">
-            {TRIAGE_STAGES.map((stage, index) => (
-              <span key={stage} className="flex items-center gap-2">
-                <Badge
-                  variant="outline"
-                  className="rounded-none border-dashed text-muted-foreground opacity-60"
-                >
-                  {stage}
-                </Badge>
-                {index < TRIAGE_STAGES.length - 1 && (
-                  <span aria-hidden="true" className="text-muted-foreground opacity-60">
-                    &rarr;
-                  </span>
-                )}
-              </span>
-            ))}
-          </div>
-          <Separator className="my-4" />
-          <p className="text-xs text-muted-foreground">
-            Illustration de l'enchaînement des statuts prévu par la spécification (Phase 7).
-            Aucun papier, aucun filtre et aucun compteur réels n'existent encore : cette rangée
-            n'est ni cliquable ni connectée à des données.
-          </p>
-        </CardContent>
-      </Card>
+      {!papers.loading && !papers.error && records.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Aucun papier enregistré. Colle un JSON ci-dessus pour commencer.
+        </p>
+      ) : null}
+
+      {records.length > 0 ? (
+        <div className="flex flex-wrap items-end gap-3">
+          <FilterSelect label="Langue" value={language} onChange={setLanguage} options={languages} />
+          <FilterSelect label="Famille" value={family} onChange={setFamily} options={families} />
+          <FilterSelect
+            label="Classe d'actifs"
+            value={assetClass}
+            onChange={setAssetClass}
+            options={assetClasses}
+          />
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={sortByTestability}
+              onChange={(e) => setSortByTestability(e.target.checked)}
+            />
+            trier par score de testabilité
+          </label>
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-4">
+        {filtered.map((record) => (
+          <PaperCard key={record.sheet.id} record={record} onChanged={refresh} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  options: string[]
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</span>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="h-8 w-40 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL_VALUE}>toutes</SelectItem>
+          {options.map((o) => (
+            <SelectItem key={o} value={o}>
+              {o}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }
