@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 
 from edgelab.config import DEFAULT_REGISTRY_DB
 from edgelab.registry import TrialRepository
@@ -63,6 +64,20 @@ def trial_show(
         typer.echo(f"Essai introuvable : {trial_id}", err=True)
         raise typer.Exit(code=1)
     typer.echo(trial.model_dump_json(indent=2))
+
+
+api_app = typer.Typer(help="Servir l'API HTTP en lecture seule (Phase 8).")
+app.add_typer(api_app, name="api")
+
+
+@api_app.command("serve")
+def api_serve(
+    host: Annotated[str, typer.Option(help="Adresse d'écoute.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Port d'écoute.")] = 8000,
+    reload: Annotated[bool, typer.Option(help="Recharger à chaud (développement).")] = False,
+) -> None:
+    """Lance `edgelab.api.main:app` avec uvicorn. L'API ne fait que lire des artefacts."""
+    uvicorn.run("edgelab.api.main:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":  # pragma: no cover

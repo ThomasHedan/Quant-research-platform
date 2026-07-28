@@ -34,7 +34,7 @@ from edgelab.universe import (
     SessionCalendar,
     SessionWindow,
 )
-from edgelab.validation.kill_criteria import StrategyLifecycleRepository
+from edgelab.validation.kill_criteria import StrategyLifecycleRepository, evaluate_kill_criteria
 
 
 @pytest.fixture
@@ -305,5 +305,145 @@ def make_edge_trades() -> Callable[[int], np.ndarray]:
         trades = np.concatenate([np.full(45, 2.0), np.full(55, -1.0)])
         np.random.default_rng(seed).shuffle(trades)
         return trades
+
+    return _make
+
+
+@pytest.fixture
+def make_strategy_bundle(
+    make_hypothesis: Callable[..., HypothesisSheet],
+    make_ruleset: Callable[..., PropFirmRuleset],
+    trial_repository: TrialRepository,
+) -> Callable[..., Any]:
+    """Factory produisant un `StrategyBundle` (Phase 8) réel, calculé sur `returns` fournis.
+
+    Chaque champ est produit par les vraies fonctions de `edgelab.validation` /
+    `edgelab.propsim`, avec de petits `n_paths` pour rester rapide — jamais des
+    valeurs inventées à la main.
+    """
+    from edgelab.api.schemas import (
+        ConfidenceInterval,
+        InstrumentBreakdown,
+        MonteCarloFan,
+        NaiveComparison,
+        StrategyBundle,
+        SubperiodPoint,
+        VolRegimePoint,
+    )
+    from edgelab.propsim.baseline import simulate_with_baseline
+    from edgelab.propsim.risk_surface import sweep_risk_surface
+    from edgelab.strategies.models import StrategyStatus
+    from edgelab.validation.bootstrap import block_bootstrap_paths, compare_block_vs_iid_bootstrap
+    from edgelab.validation.costs_stress import costs_stress_test
+    from edgelab.validation.dsr import deflated_sharpe_ratio_from_registry
+    from edgelab.validation.pbo import probability_of_backtest_overfitting
+    from edgelab.validation.permutation import permutation_test
+    from edgelab.validation.start_date_sensitivity import start_date_sensitivity
+    from edgelab.validation.walk_forward import walk_forward
+
+    def _ci(values: np.ndarray) -> ConfidenceInterval:
+        mean = float(np.mean(values))
+        sem = (
+            float(np.std(values, ddof=1)) / float(np.sqrt(values.size)) if values.size > 1 else 0.0
+        )
+        return ConfidenceInterval(
+            mean=mean, ci_low=mean - 1.96 * sem, ci_high=mean + 1.96 * sem, n=values.size
+        )
+
+    def _make(
+        *, strategy_id: str = "orb-fade-v1", returns: np.ndarray | None = None, seed: int = 7
+    ) -> Any:
+        rng = np.random.default_rng(seed)
+        r = returns if returns is not None else rng.normal(0.3, 1.0, 100)
+        param_grid = {"a": r, "b": rng.normal(0.0, 1.0, r.size)}
+
+        permutation = permutation_test(r, n_permutations=200, rng=rng)
+        walk_fwd = walk_forward(param_grid, in_sample_size=40, out_of_sample_size=20)
+        pbo = probability_of_backtest_overfitting(param_grid, n_partitions=4)
+        # Le DSR lit un compteur d'essais réel (I1) : au moins un essai doit exister avant
+        # de le calculer, sans quoi `deflated_sharpe_ratio_from_registry` refuse (n_trials=0).
+        trial_repository.record(
+            Trial(
+                id=f"{strategy_id}__seed__{rng.integers(0, 2**31)}",
+                trial_type=TrialType.BACKTEST,
+                strategy_id=strategy_id,
+                code_hash="c0de" * 16,
+                params={},
+                params_hash="params" * 10 + "abcd",
+                dataset_hash="data" * 16,
+                lineage_hash="1ineage" * 9 + "abc",
+            )
+        )
+        dsr = deflated_sharpe_ratio_from_registry(r, repository=trial_repository)
+        hypothesis = make_hypothesis(strategy_id=strategy_id)
+        verdict = evaluate_kill_criteria(hypothesis, {"t_stat": 3.0})
+        ruleset = make_ruleset()
+        propsim = simulate_with_baseline(
+            r,
+            ruleset=ruleset,
+            phase_name="challenge",
+            risk_per_trade_pct=0.01,
+            trades_per_day=2,
+            max_days=60,
+            n_paths=200,
+            rng=rng,
+        )
+        risk_surface = sweep_risk_surface(
+            r,
+            ruleset=ruleset,
+            phase_name="challenge",
+            risk_levels_pct=np.array([0.005, 0.01]),
+            trades_per_day=2,
+            max_days=60,
+            n_paths=100,
+            rng=rng,
+        )
+        fan_paths = block_bootstrap_paths(r, block_size=5, n_resamples=50, rng=rng)
+        fan_equity = np.cumsum(fan_paths, axis=1)
+        return StrategyBundle(
+            strategy_id=strategy_id,
+            family="Test",
+            universe="fx_majors",
+            status=StrategyStatus.CANDIDATE,
+            lineage=(strategy_id,),
+            hypothesis=hypothesis,
+            kill_criteria_verdict=verdict,
+            trade_r_multiples=tuple(r.tolist()),
+            equity_curve=tuple(np.cumsum(r).tolist()),
+            mae_mfe_mean_mae=0.4,
+            mae_mfe_mean_mfe=0.6,
+            subperiod_stats=(SubperiodPoint(label="T1", stats=_ci(r), t_stat=1.0),),
+            vol_regime_stats=(VolRegimePoint(tercile="low", stats=_ci(r), t_stat=1.0),),
+            naive_comparison=NaiveComparison(
+                triggered=_ci(r),
+                naive=_ci(r * 0.1),
+                mean_diff=0.1,
+                p_value=0.2,
+                improves_on_naive=True,
+            ),
+            instrument_breakdown=(
+                InstrumentBreakdown(symbol="EURUSD", stats=_ci(r), t_stat=1.0, hit_rate=0.5),
+            ),
+            monte_carlo_fan=MonteCarloFan(
+                trade_index=tuple(range(r.size)),
+                p10=tuple(np.quantile(fan_equity, 0.1, axis=0).tolist()),
+                p50=tuple(np.quantile(fan_equity, 0.5, axis=0).tolist()),
+                p90=tuple(np.quantile(fan_equity, 0.9, axis=0).tolist()),
+            ),
+            bootstrap_comparison=compare_block_vs_iid_bootstrap(
+                r, block_size=5, n_resamples=100, rng=rng
+            ),
+            permutation=permutation,
+            walk_forward=walk_fwd,
+            dsr=dsr,
+            pbo=pbo,
+            start_date_sensitivity=start_date_sensitivity(r, n_start_dates=30, window_length=50),
+            costs_stress=costs_stress_test(r, 0.05),
+            propsim=propsim,
+            risk_surface=risk_surface,
+            ruleset_name="test",
+            holdout_access_count=0,
+            holdout_flagged=False,
+        )
 
     return _make
