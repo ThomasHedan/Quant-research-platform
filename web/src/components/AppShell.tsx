@@ -22,9 +22,9 @@ export function AppShell() {
   return (
     <div className="min-h-svh flex flex-col">
       <header className="border-b border-border bg-card">
-        <div className="mx-auto max-w-[1400px] px-4 flex items-center gap-6 h-12">
-          <span className="text-sm font-semibold tracking-tight">EDGELAB</span>
-          <nav className="flex items-center gap-1 text-sm">
+        <div className="mx-auto max-w-[1400px] px-4 flex items-center gap-6 h-12 overflow-x-auto">
+          <span className="text-sm font-semibold tracking-tight shrink-0">EDGELAB</span>
+          <nav className="flex items-center gap-1 text-sm shrink-0">
             {NAV.map((item) => (
               <NavLink
                 key={item.to}
@@ -32,7 +32,7 @@ export function AppShell() {
                 end={item.end}
                 className={({ isActive }) =>
                   cn(
-                    "px-2.5 py-1 rounded-sm transition-colors",
+                    "px-2.5 py-1 rounded-sm transition-colors whitespace-nowrap",
                     isActive
                       ? "bg-secondary text-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -43,7 +43,10 @@ export function AppShell() {
               </NavLink>
             ))}
           </nav>
-          <div className="ml-auto num text-xs text-muted-foreground" title="Compteur global d'essais — l'entrée du Deflated Sharpe Ratio">
+          <div
+            className="ml-auto num text-xs text-muted-foreground shrink-0 whitespace-nowrap"
+            title="Compteur global d'essais — l'entrée du Deflated Sharpe Ratio"
+          >
             essais : <span className="text-foreground font-medium">{data?.count ?? "—"}</span>
           </div>
         </div>

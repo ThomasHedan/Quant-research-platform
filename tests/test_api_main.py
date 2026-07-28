@@ -180,6 +180,18 @@ def test_portfolio_combination_404s_for_an_unknown_strategy(client: TestClient) 
     assert response.status_code == 404
 
 
+def test_portfolio_combination_400s_for_a_single_known_strategy(
+    client: TestClient, make_strategy_bundle: Callable[..., Any]
+) -> None:
+    """Une seule stratégie connue renvoie 400 (400, pas un 500 non géré) : la contribution
+    marginale se mesure par exclusion, ce qui n'a pas de sens à N=1."""
+    store._write_bundle(make_strategy_bundle(strategy_id="a"))
+
+    response = client.get("/api/portfolio/combination", params={"strategy_ids": ["a"]})
+
+    assert response.status_code == 400
+
+
 def test_portfolio_combination_returns_marginal_contributions(
     client: TestClient, make_strategy_bundle: Callable[..., Any]
 ) -> None:

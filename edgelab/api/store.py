@@ -67,6 +67,14 @@ un endpoint appelé depuis l'UI doit répondre en dessous de la seconde, la
 précision du dernier chiffre significatif n'est pas ce qui est demandé ici.
 """
 
+_N_PATHS_OPTIMIZE = 400
+_N_CANDIDATES_OPTIMIZE = 12
+"""`optimize_allocation` simule `n_candidates + 1` portefeuilles complets (recherche
+aléatoire + référence équipondérée) : à `_N_PATHS_INTERACTIVE`, le coût total (mesuré
+à ~12 s pour 2 stratégies) est trop lent pour un endpoint interactif. Réduit ici
+spécifiquement — la recherche de l'allocation optimale est de toute façon une
+approximation par tirages aléatoires, pas un optimum exact (voir edgelab/portfolio/README.md)."""
+
 
 class StrategyNotFoundError(RuntimeError):
     """Levée quand `strategy_id` ne correspond à aucun bundle connu."""
@@ -288,7 +296,8 @@ def run_optimize_allocation(
         risk_per_trade_pct=0.01,
         trades_per_day=2,
         max_days=180,
-        n_paths=_N_PATHS_INTERACTIVE,
+        n_paths=_N_PATHS_OPTIMIZE,
+        n_candidates=_N_CANDIDATES_OPTIMIZE,
         rng=rng,
     )
 

@@ -132,7 +132,12 @@ def get_combination(
     ruleset: Annotated[str, Query()] = "ftmo",
     phase: Annotated[str | None, Query()] = None,
 ) -> CombinationResult:
-    """P(passage) du portefeuille, corrélation et contribution marginale par stratégie (I5)."""
+    """P(passage) du portefeuille, corrélation et contribution marginale par stratégie (I5).
+
+    Requiert au moins 2 `strategy_ids` : la contribution marginale se mesure
+    par exclusion, ce qui n'a pas de sens pour une seule stratégie
+    (`edgelab.portfolio.combination.explore_combination`).
+    """
     weight = 1.0 / len(strategy_ids)
     weights = dict.fromkeys(strategy_ids, weight)
     try:
@@ -141,6 +146,8 @@ def get_combination(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/portfolio/optimize", response_model=AllocationSearchResult)
@@ -156,6 +163,8 @@ def get_optimal_allocation(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/papers", response_model=PapersStatus)
