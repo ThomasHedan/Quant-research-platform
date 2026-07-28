@@ -6,16 +6,73 @@
 
    Écarte délibérément les trois réflexes que CLAUDE.md §4 proscrit (fond
    crème + serif + terracotta ; quasi-noir + accent vert acide ; broadsheet à
-   filets fins). Ici : encre graphite sur gris froid pâle (jamais crème),
-   grotesk sans-serif partout, une seule couleur de signal — un ambre de
-   cadran d'oscilloscope — réservée à la significativité statistique, jamais
-   au "profitable". Le rouge est réservé à `dead`. Chasse fixe (tabular-nums)
-   sur tout nombre. Angles vifs, filets fins, aucune ombre portée "SaaS".
+   filets fins) — et une quatrième tentation que ce noir professionnel rend
+   facile : le noir + ambre qui lirait comme un terminal Bloomberg. Le sujet
+   reste un instrument de mesure, pas un poste de trading (CLAUDE.md §4).
+   C'est pourquoi le signal est un azur électrique, pas un ambre — une couleur
+   de LED de labo, pas de phosphore de terminal.
+
+   Base graphite quasi-noire par défaut (demande explicite : UI "plutôt de
+   couleur noire"), avec un mode clair conservé comme repli explicite pour
+   `prefers-color-scheme: light` ou `data-theme="light"`. Grotesk sans-serif
+   partout, une seule couleur de signal — réservée à la significativité
+   statistique, jamais au "profitable" (pas de vert ici). Le rouge reste
+   réservé à `dead` / breach / au drapeau holdout. Chasse fixe (tabular-nums)
+   sur tout nombre. Angles vifs, filets fins, aucune ombre portée "SaaS" — la
+   profondeur vient du contraste des panneaux et d'une lueur de signal
+   discrète, jamais d'un drop-shadow.
    ========================================================================== */
 
 :root {
   --radius: 0.2rem;
 
+  /* Graphite quasi-noir — pas de noir pur (#000), pour rester "instrument",
+     pas "capot d'écran éteint". */
+  --background: oklch(15.5% 0.006 255);
+  --foreground: oklch(96% 0.003 240);
+
+  --card: oklch(19.5% 0.008 255);
+  --card-foreground: var(--foreground);
+  --popover: oklch(19.5% 0.008 255);
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(96% 0.003 240);
+  --primary-foreground: oklch(15.5% 0.006 255);
+
+  --secondary: oklch(24% 0.01 255);
+  --secondary-foreground: var(--foreground);
+
+  --muted: oklch(21.5% 0.009 255);
+  --muted-foreground: oklch(65% 0.013 250);
+
+  --accent: oklch(26% 0.011 255);
+  --accent-foreground: var(--foreground);
+
+  /* Rouge : réservé à `dead` / breach / drapeau holdout (I3). Jamais un
+     autre usage. */
+  --destructive: oklch(65% 0.21 26);
+  --destructive-foreground: oklch(98% 0.012 26);
+
+  --border: oklch(29% 0.012 255);
+  --input: oklch(29% 0.012 255);
+  --ring: var(--signal);
+
+  /* Azur électrique : LA seule couleur de signal, réservée à la
+     significativité statistique (t-stat, DSR, p-value, PBO). Jamais
+     "profitable" ; jamais l'ambre d'un terminal de trading. */
+  --signal: oklch(78% 0.16 224);
+  --signal-foreground: oklch(15% 0.03 224);
+
+  --font-sans:
+    ui-sans-serif, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "Berkeley Mono", "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+}
+
+/* Mode clair : repli explicite, pas le défaut. Conserve la même identité
+   (encre graphite sur gris froid pâle) que la première itération de la
+   Phase 8, avec le signal réaccordé sur la même famille azur. */
+:root[data-theme="light"] {
   --background: oklch(97.3% 0.003 240);
   --foreground: oklch(23% 0.012 255);
 
@@ -36,86 +93,46 @@
   --accent: oklch(92% 0.006 240);
   --accent-foreground: var(--foreground);
 
-  /* Rouge : réservé à `dead` / breach. Jamais un autre usage. */
-  --destructive: oklch(52% 0.19 25);
-  --destructive-foreground: oklch(98% 0.01 25);
+  --destructive: oklch(52% 0.19 26);
+  --destructive-foreground: oklch(98% 0.01 26);
 
   --border: oklch(85% 0.007 240);
   --input: oklch(85% 0.007 240);
-  --ring: var(--signal);
 
-  /* Ambre de cadran : LA seule couleur de signal, réservée à la
-     significativité statistique (t-stat, DSR, p-value). Jamais "profitable". */
-  --signal: oklch(64% 0.15 63);
-  --signal-foreground: oklch(18% 0.02 63);
-
-  --font-sans:
-    ui-sans-serif, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono:
-    ui-monospace, "Berkeley Mono", "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, monospace;
+  --signal: oklch(56% 0.18 235);
+  --signal-foreground: oklch(98% 0.012 235);
 }
 
-:root[data-theme="dark"] {
-  --background: oklch(19% 0.007 255);
-  --foreground: oklch(92% 0.004 240);
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --background: oklch(97.3% 0.003 240);
+    --foreground: oklch(23% 0.012 255);
 
-  --card: oklch(22% 0.008 255);
-  --card-foreground: var(--foreground);
-  --popover: oklch(22% 0.008 255);
-  --popover-foreground: var(--foreground);
-
-  --primary: oklch(92% 0.004 240);
-  --primary-foreground: oklch(19% 0.007 255);
-
-  --secondary: oklch(27% 0.009 255);
-  --secondary-foreground: var(--foreground);
-
-  --muted: oklch(27% 0.009 255);
-  --muted-foreground: oklch(66% 0.012 250);
-
-  --accent: oklch(29% 0.01 255);
-  --accent-foreground: var(--foreground);
-
-  --destructive: oklch(62% 0.19 25);
-  --destructive-foreground: oklch(98% 0.01 25);
-
-  --border: oklch(32% 0.012 255);
-  --input: oklch(32% 0.012 255);
-
-  --signal: oklch(75% 0.15 66);
-  --signal-foreground: oklch(16% 0.02 66);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --background: oklch(19% 0.007 255);
-    --foreground: oklch(92% 0.004 240);
-
-    --card: oklch(22% 0.008 255);
+    --card: oklch(99.2% 0.002 240);
     --card-foreground: var(--foreground);
-    --popover: oklch(22% 0.008 255);
+    --popover: oklch(99.2% 0.002 240);
     --popover-foreground: var(--foreground);
 
-    --primary: oklch(92% 0.004 240);
-    --primary-foreground: oklch(19% 0.007 255);
+    --primary: oklch(23% 0.012 255);
+    --primary-foreground: oklch(98% 0.002 240);
 
-    --secondary: oklch(27% 0.009 255);
+    --secondary: oklch(93% 0.005 240);
     --secondary-foreground: var(--foreground);
 
-    --muted: oklch(27% 0.009 255);
-    --muted-foreground: oklch(66% 0.012 250);
+    --muted: oklch(94.5% 0.004 240);
+    --muted-foreground: oklch(46% 0.012 250);
 
-    --accent: oklch(29% 0.01 255);
+    --accent: oklch(92% 0.006 240);
     --accent-foreground: var(--foreground);
 
-    --destructive: oklch(62% 0.19 25);
-    --destructive-foreground: oklch(98% 0.01 25);
+    --destructive: oklch(52% 0.19 26);
+    --destructive-foreground: oklch(98% 0.01 26);
 
-    --border: oklch(32% 0.012 255);
-    --input: oklch(32% 0.012 255);
+    --border: oklch(85% 0.007 240);
+    --input: oklch(85% 0.007 240);
 
-    --signal: oklch(75% 0.15 66);
-    --signal-foreground: oklch(16% 0.02 66);
+    --signal: oklch(56% 0.18 235);
+    --signal-foreground: oklch(98% 0.012 235);
   }
 }
 
