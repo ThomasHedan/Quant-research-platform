@@ -8,6 +8,7 @@ import { PortfolioExplorer } from "@/pages/PortfolioExplorer"
 import { DataLibrary } from "@/pages/DataLibrary"
 import { PapersLibrary } from "@/pages/PapersLibrary"
 import { TrialLog } from "@/pages/TrialLog"
+import { Settings } from "@/pages/Settings"
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
             <Route path="data" element={<DataLibrary />} />
             <Route path="papers" element={<PapersLibrary />} />
             <Route path="trials" element={<TrialLog />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>
       </BrowserRouter>

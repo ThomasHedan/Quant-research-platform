@@ -12,6 +12,9 @@ DEFAULT_REGISTRY_DB = DEFAULT_STATE_DIR / "registry.sqlite3"
 DEFAULT_LOCKBOX_DB = DEFAULT_STATE_DIR / "lockbox.sqlite3"
 DEFAULT_PAPERS_DB = DEFAULT_STATE_DIR / "papers.sqlite3"
 
+DEFAULT_CREDENTIALS_FILE = DEFAULT_STATE_DIR / "credentials.env"
+"""Clés API locales, en 0600, hors du dépôt. Voir `edgelab/settings.py`."""
+
 DEFAULT_DATA_DIR = DEFAULT_STATE_DIR / "data"
 DEFAULT_DATASET_CATALOG = DEFAULT_DATA_DIR / "catalog.duckdb"
 DEFAULT_BARS_DIR = DEFAULT_DATA_DIR / "bars"

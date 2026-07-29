@@ -10,6 +10,7 @@ commande n'est livrée avant que le module qu'elle orchestre existe et soit
 testé.
 """
 
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from pydantic import ValidationError
 
 from edgelab.config import (
     DEFAULT_BARS_DIR,
+    DEFAULT_CREDENTIALS_FILE,
     DEFAULT_DATASET_CATALOG,
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_LOCKBOX_DB,
@@ -56,6 +58,7 @@ from edgelab.papers import (
 )
 from edgelab.papers.prompts import PAPER_ANALYSIS_PROMPT, hypothesis_draft_prompt_for
 from edgelab.registry import TrialRepository
+from edgelab.settings import CredentialError, CredentialStore, describe, mask
 from edgelab.universe import find_instrument
 
 app = typer.Typer(
@@ -500,3 +503,77 @@ def data_holdout(  # noqa: PLR0913, PLR0917 — chaque paramètre est une décis
             "holdout moins crédible.",
             err=True,
         )
+
+
+config_app = typer.Typer(help="Clés API locales : stockage en 0600, hors du dépôt.")
+app.add_typer(config_app, name="config")
+
+CredentialsFileOption = Annotated[
+    Path, typer.Option("--credentials-file", help="Fichier de clés local.")
+]
+
+
+@config_app.command("list")
+def config_list(credentials_file: CredentialsFileOption = DEFAULT_CREDENTIALS_FILE) -> None:
+    """Liste les emplacements de clés et leur provenance. N'affiche jamais une clé en clair."""
+    store = CredentialStore(credentials_file)
+    typer.echo(f"fichier : {store.path}\n")
+    for status in describe(store):
+        state = status.hint if status.configured else "—"
+        wired = "" if status.wired else "  (lue par aucun module)"
+        typer.echo(
+            f"{status.env_var:<24} {state:<28} source={status.source:<12}{wired}\n"
+            f"{'':<24} {status.label} — {status.description}"
+        )
+
+
+@config_app.command("set")
+def config_set(
+    env_var: Annotated[str, typer.Argument(help="Nom de la clé, ex. LSE_API_KEY.")],
+    value: Annotated[
+        str,
+        typer.Option(
+            "--value",
+            prompt="Clé (masquée)",
+            hide_input=True,
+            help="Omis, la valeur est demandée sans être affichée ni conservée dans l'historique.",
+        ),
+    ],
+    credentials_file: CredentialsFileOption = DEFAULT_CREDENTIALS_FILE,
+) -> None:
+    """Enregistre une clé dans le fichier local.
+
+    `--value` est demandé en saisie masquée quand il n'est pas fourni : le
+    passer en argument le laisserait dans l'historique du shell.
+    """
+    store = CredentialStore(credentials_file)
+    try:
+        store.set(env_var, value)
+    except CredentialError as exc:
+        typer.echo(f"Erreur : {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{env_var.strip()} enregistrée dans {store.path} ({mask(value.strip())})")
+    if os.environ.get(env_var.strip(), "").strip():
+        typer.echo(
+            f"Attention : la variable d'environnement {env_var.strip()} est définie et "
+            "gardera la priorité sur le fichier.",
+            err=True,
+        )
+
+
+@config_app.command("unset")
+def config_unset(
+    env_var: Annotated[str, typer.Argument(help="Nom de la clé à supprimer.")],
+    credentials_file: CredentialsFileOption = DEFAULT_CREDENTIALS_FILE,
+) -> None:
+    """Supprime une clé du fichier local. La variable d'environnement n'est pas touchée."""
+    store = CredentialStore(credentials_file)
+    try:
+        removed = store.unset(env_var)
+    except CredentialError as exc:
+        typer.echo(f"Erreur : {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not removed:
+        typer.echo(f"{env_var} n'était pas enregistrée dans {store.path}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"{env_var} supprimée de {store.path}")

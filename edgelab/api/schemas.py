@@ -258,3 +258,29 @@ class HoldoutResult(BaseModel):
     n_bars: int
     access_count: int
     flagged: bool
+
+
+class CredentialStatusResponse(BaseModel):
+    """L'état d'un emplacement de clé. Ne porte jamais la valeur, par construction du schéma."""
+
+    env_var: str
+    label: str
+    description: str
+    docs_url: str
+    wired: bool
+    configured: bool
+    source: str
+    hint: str
+
+
+class SettingsResponse(BaseModel):
+    """Les réglages de la plateforme : emplacements de clés et où ils sont stockés."""
+
+    credentials_file: str
+    credentials: tuple[CredentialStatusResponse, ...]
+
+
+class CredentialUpdate(BaseModel):
+    """Écriture d'une clé. La valeur ne transite qu'en entrée, jamais en sortie."""
+
+    value: str

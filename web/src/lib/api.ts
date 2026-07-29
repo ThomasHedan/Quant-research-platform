@@ -19,6 +19,7 @@ import type {
   ProviderInstrument,
   RiskSurfaceResult,
   RulesetSummary,
+  SettingsResponse,
   StrategyBundle,
   TriageStatus,
   Trial,
@@ -89,7 +90,7 @@ async function request<T>(path: string, params?: Record<string, string | string[
  */
 async function requestWithBody<T>(
   path: string,
-  method: "POST" | "PATCH",
+  method: "POST" | "PATCH" | "PUT",
   body: unknown,
 ): Promise<T> {
   const url = new URL(path, API_BASE)
@@ -101,6 +102,16 @@ async function requestWithBody<T>(
   if (!response.ok) {
     const responseBody = await response.json().catch(() => null)
     throw new ApiError(response.status, extractErrorMessage(responseBody, response.statusText))
+  }
+  return response.json() as Promise<T>
+}
+
+async function requestDelete<T>(path: string): Promise<T> {
+  const url = new URL(path, API_BASE)
+  const response = await fetch(url, { method: "DELETE" })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new ApiError(response.status, extractErrorMessage(body, response.statusText))
   }
   return response.json() as Promise<T>
 }
@@ -159,6 +170,16 @@ export const api = {
       strategy_id: strategyId,
       reason,
     }),
+
+  getSettings: () => request<SettingsResponse>("/api/settings"),
+  setCredential: (envVar: string, value: string) =>
+    requestWithBody<SettingsResponse>(
+      `/api/settings/${encodeURIComponent(envVar)}`,
+      "PUT",
+      { value },
+    ),
+  deleteCredential: (envVar: string) =>
+    requestDelete<SettingsResponse>(`/api/settings/${encodeURIComponent(envVar)}`),
 
   listPapers: () => request<PaperRecord[]>("/api/papers"),
   getPaper: (paperId: string) => request<PaperRecord>(`/api/papers/${encodeURIComponent(paperId)}`),

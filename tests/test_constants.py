@@ -17,3 +17,6 @@ LSE_TIMEFRAME_COUNT = 14
 
 RED_FLAG_ACCESS_COUNT = 3
 """Nombre d'accès holdout à partir duquel l'UI doit lever un drapeau rouge (I3)."""
+
+SAMPLE_API_KEY = "sk-live-0123456789abcdef"
+"""Clé factice pour les tests de `edgelab.settings`. Aucun secret réel dans le dépôt."""

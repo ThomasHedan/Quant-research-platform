@@ -27,10 +27,13 @@ from typing import Any, Final, Protocol, cast
 
 import polars as pl
 
+from edgelab.settings import resolve
+
 logger = logging.getLogger(__name__)
 
 API_KEY_ENV_VAR: Final = "LSE_API_KEY"
-"""Variable d'environnement lue par le SDK. La clé n'est jamais écrite sur disque par EdgeLab."""
+"""Nom de l'emplacement de clé. Résolu par `edgelab.settings` : variable d'environnement
+d'abord, puis fichier local en 0600 — jamais versionné, jamais renvoyé par l'API."""
 
 MAX_ROWS_PER_CALL: Final = 5_000
 """Plafond dur de l'endpoint `/vault/candles`. Au-delà, il faut paginer."""
@@ -115,6 +118,34 @@ class LseClient(Protocol):
         ...
 
 
+class _TranslatingClient:
+    """Enveloppe le client du SDK pour convertir ses erreurs en `LseDataError`.
+
+    Le SDK lève `lse.LSEError` sur tout non-2xx (clé invalide, quota dépassé,
+    limite de débit, table interdite). Sans cette traduction, une clé expirée
+    remonterait en traceback brut jusqu'au CLI, alors que le reste du module a
+    déjà un type d'erreur que chaque appelant sait présenter proprement. La
+    conversion vit ici, à la frontière réseau, et nulle part ailleurs.
+    """
+
+    def __init__(self, inner: object, error_type: type[Exception]) -> None:
+        self._inner = inner
+        self._error_type = error_type
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401 — proxy transparent
+        attribute = getattr(self._inner, name)
+        if not callable(attribute):
+            return attribute
+
+        def _call(*args: object, **kwargs: object) -> Any:  # noqa: ANN401 — proxy transparent
+            try:
+                return attribute(*args, **kwargs)
+            except self._error_type as exc:
+                raise LseDataError(f"London Strategic Edge a refusé l'appel : {exc}") from exc
+
+        return _call
+
+
 def open_client(api_key: str | None = None) -> LseClient:
     """Construit un vrai client LSE. Seule fonction du module qui touche au réseau.
 
@@ -122,12 +153,19 @@ def open_client(api_key: str | None = None) -> LseClient:
     optionnelle : tout le reste d'EdgeLab, y compris les tests de ce module,
     fonctionne sans qu'il soit installé.
 
+    La clé vient, dans l'ordre : l'argument, la variable d'environnement, puis le
+    fichier de clés local (`edgelab.settings`). Aucune de ces valeurs n'est
+    journalisée.
+
     Raises:
         LseDataError: si `lse-data` n'est pas installé, ou si aucune clé n'est
-            fournie ni présente dans l'environnement.
+            trouvée par aucune de ces trois voies.
     """
     try:
-        from lse import LSE  # noqa: PLC0415 — import paresseux : dépendance optionnelle
+        from lse import (  # noqa: PLC0415 — import paresseux : dépendance optionnelle
+            LSE,
+            LSEError,
+        )
     except ImportError as exc:
         raise LseDataError(
             "le SDK London Strategic Edge n'est pas installé : `uv sync --extra lse`"
@@ -135,12 +173,14 @@ def open_client(api_key: str | None = None) -> LseClient:
     try:
         # Le SDK est typé (py.typed) quand il est installé ; sans lui, mypy voit Any
         # à travers l'override ignore_missing_imports. Le cast couvre les deux cas.
-        return cast(LseClient, LSE(api_key=api_key))
+        client = LSE(api_key=api_key or resolve(API_KEY_ENV_VAR))
     except (ValueError, RuntimeError) as exc:
         raise LseDataError(
             f"clé API London Strategic Edge manquante : renseigner {API_KEY_ENV_VAR} "
+            "dans la page Réglages ou via `edgelab config set` "
             "(clé gratuite sur londonstrategicedge.com/data)"
         ) from exc
+    return cast(LseClient, _TranslatingClient(client, LSEError))
 
 
 def _pick_column(row: dict[str, Any], aliases: tuple[str, ...]) -> str | None:

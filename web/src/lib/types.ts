@@ -420,3 +420,21 @@ export interface HoldoutResult {
   access_count: number
   flagged: boolean
 }
+
+export interface CredentialStatus {
+  env_var: string
+  label: string
+  description: string
+  docs_url: string
+  wired: boolean
+  configured: boolean
+  /** `environment`, `file` ou `absent` — la provenance effective, précédence appliquée. */
+  source: string
+  /** Les derniers caractères de la clé, ou une chaîne vide. Jamais la clé entière. */
+  hint: string
+}
+
+export interface SettingsResponse {
+  credentials_file: string
+  credentials: CredentialStatus[]
+}

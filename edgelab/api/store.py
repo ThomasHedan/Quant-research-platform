@@ -29,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from edgelab.api.schemas import (
+    CredentialStatusResponse,
     DatasetDetail,
     DatasetSummary,
     DownloadRequest,
@@ -37,11 +38,13 @@ from edgelab.api.schemas import (
     HoldoutResult,
     LeaderboardRow,
     ProviderInstrument,
+    SettingsResponse,
     SplitSummary,
     StrategyBundle,
 )
 from edgelab.config import (
     DEFAULT_BARS_DIR,
+    DEFAULT_CREDENTIALS_FILE,
     DEFAULT_DATASET_CATALOG,
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_LOCKBOX_DB,
@@ -77,18 +80,21 @@ from edgelab.propsim.risk_surface import sweep_risk_surface
 from edgelab.propsim.simulator import DEFAULT_BLOCK_SIZE
 from edgelab.registry.models import Trial
 from edgelab.registry.repository import TrialRepository
+from edgelab.settings import CredentialError, CredentialStore, describe
 from edgelab.universe import BROAD_12, find_instrument
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_BARS_DIR",
+    "DEFAULT_CREDENTIALS_FILE",
     "DEFAULT_DATASET_CATALOG",
     "DEFAULT_DOWNLOAD_DIR",
     "DEFAULT_LOCKBOX_DB",
     "DEFAULT_PAPERS_DB",
     "DEFAULT_REGISTRY_DB",
     "SEED_DATA_DIR",
+    "CredentialError",
     "PaperNotFoundError",
     "PaperRepositoryError",
     "StrategyNotFoundError",
@@ -118,7 +124,10 @@ __all__ = [
     "run_optimize_allocation",
     "run_provider_catalog",
     "run_risk_surface",
+    "set_credential",
     "set_paper_status",
+    "settings_status",
+    "unset_credential",
 ]
 """`DEFAULT_REGISTRY_DB`/`DEFAULT_LOCKBOX_DB` sont réexportés délibérément : les tests
 monkeypatchent `store.DEFAULT_REGISTRY_DB` pour isoler chaque cas sur un registre
@@ -634,3 +643,46 @@ def run_holdout(request: HoldoutRequest) -> HoldoutResult:
             access_count=lockbox.access_count(request.strategy_id),
             flagged=lockbox.is_flagged(request.strategy_id),
         )
+
+
+# --- Réglages (clés API) ------------------------------------------------------
+#
+# Rien ici ne renvoie jamais un secret. `settings_status` lit `describe`, qui ne
+# produit que des états masqués ; `set_credential`/`unset_credential` écrivent
+# via `edgelab.settings.CredentialStore`, qui porte seul la validation et les
+# permissions du fichier. L'API ne réimplémente aucune de ces règles.
+
+
+def _credential_store() -> CredentialStore:
+    return CredentialStore(DEFAULT_CREDENTIALS_FILE)
+
+
+def settings_status() -> SettingsResponse:
+    """L'état de chaque emplacement de clé, masqué, et le fichier qui les porte."""
+    store = _credential_store()
+    return SettingsResponse(
+        credentials_file=str(store.path.resolve()),
+        credentials=tuple(CredentialStatusResponse(**vars(status)) for status in describe(store)),
+    )
+
+
+def set_credential(env_var: str, value: str) -> SettingsResponse:
+    """Enregistre une clé dans le fichier local, puis renvoie l'état masqué mis à jour.
+
+    Raises:
+        CredentialError: si le nom est invalide ou la valeur vide.
+    """
+    _credential_store().set(env_var, value)
+    return settings_status()
+
+
+def unset_credential(env_var: str) -> SettingsResponse:
+    """Supprime une clé du fichier local, puis renvoie l'état masqué mis à jour.
+
+    Raises:
+        CredentialError: si le nom est invalide.
+        KeyError: si la clé n'était pas enregistrée.
+    """
+    if not _credential_store().unset(env_var):
+        raise KeyError(f"clé '{env_var}' non enregistrée dans le fichier local")
+    return settings_status()

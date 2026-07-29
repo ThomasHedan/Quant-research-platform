@@ -398,11 +398,64 @@ def test_open_client_reports_a_missing_api_key_as_an_actionable_error(
 ) -> None:
     """Le SDK refuse de se construire sans clé : l'erreur nomme la variable à renseigner."""
 
+    class _SdkError(Exception):
+        pass
+
     class _KeylessSdk:
         def __init__(self, **_kwargs: object) -> None:
             raise ValueError("no api key")
 
-    monkeypatch.setitem(sys.modules, "lse", SimpleNamespace(LSE=_KeylessSdk))
+    monkeypatch.setitem(sys.modules, "lse", SimpleNamespace(LSE=_KeylessSdk, LSEError=_SdkError))
 
     with pytest.raises(LseDataError, match="LSE_API_KEY"):
         open_client()
+
+
+def test_open_client_translates_provider_errors_into_lse_data_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Une clé refusée par le vault remonte en `LseDataError`, jamais en traceback du SDK.
+
+    Sans cette traduction à la frontière réseau, une clé expirée ferait exploser
+    le CLI avec l'exception interne du SDK, que rien en amont ne sait présenter.
+    """
+
+    class _SdkError(Exception):
+        pass
+
+    class _RefusingSdk:
+        tier = "free"
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def catalog(self, category: str | None = None) -> list[dict[str, Any]]:
+            raise _SdkError("[401] invalid api key")
+
+    monkeypatch.setitem(sys.modules, "lse", SimpleNamespace(LSE=_RefusingSdk, LSEError=_SdkError))
+
+    client = open_client(api_key="peu-importe")
+
+    with pytest.raises(LseDataError, match="invalid api key"):
+        client.catalog()
+
+
+def test_open_client_passes_non_callable_attributes_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L'enveloppe reste transparente : un attribut simple du SDK est lisible tel quel."""
+
+    class _SdkError(Exception):
+        pass
+
+    class _Sdk:
+        tier = "premium"
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+    monkeypatch.setitem(sys.modules, "lse", SimpleNamespace(LSE=_Sdk, LSEError=_SdkError))
+
+    client = open_client(api_key="peu-importe")
+
+    assert client.tier == "premium"  # type: ignore[attr-defined]

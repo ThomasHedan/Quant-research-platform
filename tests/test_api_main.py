@@ -9,13 +9,16 @@ from typing import Any
 
 import numpy as np
 import pytest
+from edgelab import settings as settings_module
 from edgelab.api import store
 from edgelab.api.main import app
 from edgelab.data.lse import LseDataError
 from edgelab.registry.models import Trial
 from edgelab.registry.repository import TrialRepository
+from edgelab.settings import resolve
 from fastapi.testclient import TestClient
 
+from tests.test_constants import SAMPLE_API_KEY
 from tests.test_data_lse import FakeLseClient
 
 
@@ -29,6 +32,8 @@ def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     monkeypatch.setattr(store, "DEFAULT_DATASET_CATALOG", tmp_path / "catalog.duckdb")
     monkeypatch.setattr(store, "DEFAULT_BARS_DIR", tmp_path / "bars")
     monkeypatch.setattr(store, "DEFAULT_DOWNLOAD_DIR", tmp_path / "downloads")
+    monkeypatch.setattr(store, "DEFAULT_CREDENTIALS_FILE", tmp_path / "credentials.env")
+    monkeypatch.delenv("LSE_API_KEY", raising=False)
     store._load_all_bundles.cache_clear()
     yield
     store._load_all_bundles.cache_clear()
@@ -553,3 +558,74 @@ def test_open_holdout_reports_an_unknown_dataset_as_not_found(client: TestClient
     )
 
     assert response.status_code == 404
+
+
+# --- Réglages (clés API) ------------------------------------------------------
+
+
+def test_settings_lists_the_known_slots_before_anything_is_set(client: TestClient) -> None:
+    """L'emplacement LSE est exposé même vide, avec sa provenance effective."""
+    body = client.get("/api/settings").json()
+
+    slot = next(c for c in body["credentials"] if c["env_var"] == "LSE_API_KEY")
+    assert slot["configured"] is False
+    assert slot["source"] == "absent"
+    assert slot["wired"] is True
+
+
+def test_setting_a_credential_never_returns_it_in_clear(client: TestClient) -> None:
+    """Le garde-fou principal de l'API : aucune route ne rend une clé lisible."""
+    response = client.put("/api/settings/LSE_API_KEY", json={"value": SAMPLE_API_KEY})
+
+    assert response.status_code == 200
+    assert SAMPLE_API_KEY not in response.text
+    slot = next(c for c in response.json()["credentials"] if c["env_var"] == "LSE_API_KEY")
+    assert slot["hint"].endswith(SAMPLE_API_KEY[-4:])
+    assert slot["source"] == "file"
+
+
+def test_a_stored_credential_is_read_back_by_the_provider_client(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Une clé posée depuis l'UI est bien celle que `open_client` utilise ensuite."""
+    monkeypatch.setattr(settings_module, "DEFAULT_CREDENTIALS_FILE", tmp_path / "credentials.env")
+    client.put("/api/settings/LSE_API_KEY", json={"value": SAMPLE_API_KEY})
+
+    assert resolve("LSE_API_KEY") == SAMPLE_API_KEY
+
+
+def test_setting_a_credential_rejects_an_invalid_name(client: TestClient) -> None:
+    """Un nom qui ne serait pas sourçable dans un shell est refusé en 422."""
+    response = client.put("/api/settings/ma-cle", json={"value": SAMPLE_API_KEY})
+
+    assert response.status_code == 422
+
+
+def test_setting_a_credential_rejects_an_empty_value(client: TestClient) -> None:
+    """Une valeur vide est une suppression déguisée : refusée explicitement."""
+    assert client.put("/api/settings/LSE_API_KEY", json={"value": "   "}).status_code == 422
+
+
+def test_deleting_a_credential_removes_it(client: TestClient) -> None:
+    """La suppression retire la clé du fichier et se reflète dans l'état renvoyé."""
+    client.put("/api/settings/LSE_API_KEY", json={"value": SAMPLE_API_KEY})
+
+    body = client.delete("/api/settings/LSE_API_KEY").json()
+
+    slot = next(c for c in body["credentials"] if c["env_var"] == "LSE_API_KEY")
+    assert slot["configured"] is False
+
+
+def test_deleting_a_credential_that_was_never_stored_is_not_found(client: TestClient) -> None:
+    """Supprimer une clé absente répond 404 plutôt qu'un succès silencieux."""
+    assert client.delete("/api/settings/LSE_API_KEY").status_code == 404
+
+
+def test_writing_a_credential_from_a_remote_host_is_forbidden() -> None:
+    """L'API n'a pas d'authentification : seule la machine locale peut poser un secret."""
+    remote = TestClient(app, client=("203.0.113.7", 51234))
+
+    response = remote.put("/api/settings/LSE_API_KEY", json={"value": SAMPLE_API_KEY})
+
+    assert response.status_code == 403
+    assert "machine locale" in response.json()["detail"]

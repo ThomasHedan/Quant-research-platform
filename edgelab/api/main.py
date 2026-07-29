@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
 from edgelab.api import store
 from edgelab.api.schemas import (
+    CredentialUpdate,
     DatasetDetail,
     DatasetSummary,
     DownloadRequest,
@@ -24,6 +25,7 @@ from edgelab.api.schemas import (
     HoldoutResult,
     LeaderboardRow,
     ProviderInstrument,
+    SettingsResponse,
     StrategyBundle,
     TrialLink,
 )
@@ -36,6 +38,7 @@ from edgelab.papers.repository import PaperNotFoundError, PaperRecord, PaperRepo
 from edgelab.portfolio.models import AllocationSearchResult, CombinationResult, CorrelationMatrix
 from edgelab.propsim.models import RiskSurfaceResult
 from edgelab.registry.models import Trial
+from edgelab.settings import CredentialError
 
 app = FastAPI(
     title="EdgeLab API",
@@ -48,7 +51,7 @@ _MIN_STRATEGIES_FOR_CORRELATION = 2
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["GET", "POST", "PATCH"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -321,3 +324,63 @@ def open_holdout(request: HoldoutRequest) -> HoldoutResult:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (QuarantinedDatasetError, EmptySplitError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# --- Réglages (clés API) ------------------------------------------------------
+#
+# Aucune route ici ne renvoie de secret : `SettingsResponse` ne porte que des
+# valeurs masquées, et il n'existe pas d'endpoint de lecture d'une clé.
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+
+
+def _require_loopback(request: Request) -> None:
+    """Refuse une écriture de clé venant d'ailleurs que de la machine locale.
+
+    L'API n'a aucune authentification : c'est acceptable pour un outil de
+    recherche personnel servi sur la boucle locale, et inacceptable dès qu'il
+    écoute sur une interface publique. Plutôt que de faire confiance à
+    l'utilisateur pour ne jamais lancer `--host 0.0.0.0`, la seule route qui
+    accepte un secret vérifie elle-même d'où vient l'appel.
+
+    Raises:
+        HTTPException: 403 si le client n'est pas sur la boucle locale.
+    """
+    host = request.client.host if request.client else ""
+    if host not in _LOOPBACK_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "l'écriture d'une clé API n'est autorisée que depuis la machine locale ; "
+                "l'API n'a pas d'authentification et ne doit pas écouter sur une "
+                "interface publique"
+            ),
+        )
+
+
+@app.get("/api/settings", response_model=SettingsResponse)
+def get_settings() -> SettingsResponse:
+    """État des emplacements de clés, masqué. Ne renvoie jamais une clé en clair."""
+    return store.settings_status()
+
+
+@app.put("/api/settings/{env_var}", response_model=SettingsResponse)
+def put_credential(env_var: str, body: CredentialUpdate, request: Request) -> SettingsResponse:
+    """Enregistre une clé dans le fichier local (0600). La réponse est masquée."""
+    _require_loopback(request)
+    try:
+        return store.set_credential(env_var, body.value)
+    except CredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/settings/{env_var}", response_model=SettingsResponse)
+def delete_credential(env_var: str, request: Request) -> SettingsResponse:
+    """Supprime une clé du fichier local. Une variable d'environnement n'est jamais touchée."""
+    _require_loopback(request)
+    try:
+        return store.unset_credential(env_var)
+    except CredentialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
