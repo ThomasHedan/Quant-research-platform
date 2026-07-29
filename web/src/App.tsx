@@ -5,6 +5,7 @@ import { Leaderboard } from "@/pages/Leaderboard"
 import { StrategyDetail } from "@/pages/StrategyDetail"
 import { RiskSurfacePage } from "@/pages/RiskSurfacePage"
 import { PortfolioExplorer } from "@/pages/PortfolioExplorer"
+import { DataLibrary } from "@/pages/DataLibrary"
 import { PapersLibrary } from "@/pages/PapersLibrary"
 import { TrialLog } from "@/pages/TrialLog"
 
@@ -18,6 +19,7 @@ function App() {
             <Route path="strategies/:strategyId" element={<StrategyDetail />} />
             <Route path="risk-surface" element={<RiskSurfacePage />} />
             <Route path="portfolio" element={<PortfolioExplorer />} />
+            <Route path="data" element={<DataLibrary />} />
             <Route path="papers" element={<PapersLibrary />} />
             <Route path="trials" element={<TrialLog />} />
           </Route>

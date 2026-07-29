@@ -10,3 +10,10 @@ SAMPLE_DATASET_HASH = "a" * 64
 
 # Phase 1 : données et coûts
 BAR_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+
+# Fournisseur London Strategic Edge
+LSE_TIMEFRAME_COUNT = 14
+"""Le vault documente quatorze résolutions de barres, de `1s` à `1mo`."""
+
+RED_FLAG_ACCESS_COUNT = 3
+"""Nombre d'accès holdout à partir duquel l'UI doit lever un drapeau rouge (I3)."""

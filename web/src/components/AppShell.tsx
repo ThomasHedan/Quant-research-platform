@@ -7,6 +7,7 @@ const NAV = [
   { to: "/", label: "Leaderboard", end: true },
   { to: "/risk-surface", label: "Surface de risque" },
   { to: "/portfolio", label: "Combinaisons" },
+  { to: "/data", label: "Données" },
   { to: "/papers", label: "Papiers" },
   { to: "/trials", label: "Essais" },
 ]

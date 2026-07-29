@@ -8,9 +8,15 @@ import type {
   AllocationSearchResult,
   CombinationResult,
   CorrelationMatrix,
+  DatasetDetail,
+  DatasetSummary,
+  DownloadRequest,
+  DownloadResult,
+  HoldoutResult,
   LeaderboardRow,
   PaperRecord,
   PromptResponse,
+  ProviderInstrument,
   RiskSurfaceResult,
   RulesetSummary,
   StrategyBundle,
@@ -133,6 +139,25 @@ export const api = {
       strategy_ids: strategyIds,
       ...(ruleset ? { ruleset } : {}),
       ...(phase ? { phase } : {}),
+    }),
+
+  listInstruments: () =>
+    request<{ symbol: string; name: string; asset_class: string }[]>("/api/instruments"),
+  listDatasets: () => request<DatasetSummary[]>("/api/datasets"),
+  getDataset: (datasetId: string) =>
+    request<DatasetDetail>(`/api/datasets/${encodeURIComponent(datasetId)}`),
+  getProviderCatalog: (category?: string, search?: string) =>
+    request<ProviderInstrument[]>("/api/provider/catalog", {
+      ...(category ? { category } : {}),
+      ...(search ? { search } : {}),
+    }),
+  downloadDataset: (payload: DownloadRequest) =>
+    requestWithBody<DownloadResult>("/api/provider/download", "POST", payload),
+  openHoldout: (datasetId: string, strategyId: string, reason: string) =>
+    requestWithBody<HoldoutResult>("/api/datasets/holdout", "POST", {
+      dataset_id: datasetId,
+      strategy_id: strategyId,
+      reason,
     }),
 
   listPapers: () => request<PaperRecord[]>("/api/papers"),

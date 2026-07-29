@@ -11,6 +11,7 @@ testé.
 """
 
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -18,7 +19,33 @@ import typer
 import uvicorn
 from pydantic import ValidationError
 
-from edgelab.config import DEFAULT_PAPERS_DB, DEFAULT_REGISTRY_DB
+from edgelab.config import (
+    DEFAULT_BARS_DIR,
+    DEFAULT_DATASET_CATALOG,
+    DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_LOCKBOX_DB,
+    DEFAULT_PAPERS_DB,
+    DEFAULT_REGISTRY_DB,
+)
+from edgelab.data import (
+    RED_FLAG_THRESHOLD,
+    DatasetPartition,
+    DatasetStatus,
+    DatasetStore,
+    DataSplit,
+    EmptySplitError,
+    HoldoutAccessDeniedError,
+    HoldoutLockbox,
+    LseDataError,
+    QuarantinedDatasetError,
+    UnknownDatasetError,
+    describe_splits,
+    ingest_lse_candles,
+    ingest_lse_export,
+    load_holdout,
+    open_client,
+    split_bounds,
+)
 from edgelab.papers import (
     HypothesisDraftRequest,
     PaperAnalysisRequest,
@@ -29,6 +56,7 @@ from edgelab.papers import (
 )
 from edgelab.papers.prompts import PAPER_ANALYSIS_PROMPT, hypothesis_draft_prompt_for
 from edgelab.registry import TrialRepository
+from edgelab.universe import find_instrument
 
 app = typer.Typer(
     name="edgelab",
@@ -226,3 +254,249 @@ def paper_set_status(
 
 if __name__ == "__main__":  # pragma: no cover
     app()
+
+
+data_app = typer.Typer(
+    help="Données de marché : catalogue London Strategic Edge, téléchargement, splits."
+)
+app.add_typer(data_app, name="data")
+
+CatalogPathOption = Annotated[
+    Path, typer.Option("--catalog-path", help="Catalogue DuckDB des manifestes de dataset.")
+]
+BarsDirOption = Annotated[Path, typer.Option("--bars-dir", help="Répertoire des barres Parquet.")]
+
+
+def _open_store(catalog_path: Path, bars_dir: Path) -> DatasetStore:
+    return DatasetStore(catalog_path, bars_dir)
+
+
+def _parse_utc(value: str) -> datetime:
+    """Interprète une date ISO-8601 comme un instant UTC.
+
+    Une date sans fuseau est lue comme de l'UTC plutôt que comme l'heure locale
+    de la machine : un même téléchargement doit donner le même dataset quel que
+    soit le poste, sinon le hash de manifeste (I1) ne veut plus rien dire.
+
+    Raises:
+        typer.BadParameter: si la chaîne n'est pas une date ISO-8601.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(f"date ISO-8601 attendue, reçu {value!r}") from exc
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+@data_app.command("catalog")
+def data_catalog(
+    category: Annotated[
+        str | None,
+        typer.Option("--category", help="fx, stocks, crypto, index, commodity, etf, bonds…"),
+    ] = None,
+    search: Annotated[
+        str | None, typer.Option("--search", help="Filtre sur le symbole ou le nom.")
+    ] = None,
+    limit: Annotated[int, typer.Option(help="Nombre maximum de lignes affichées.")] = 40,
+) -> None:
+    """Liste les instruments disponibles chez London Strategic Edge.
+
+    Nécessite une clé API (`LSE_API_KEY`) : le catalogue est lu sur le vault
+    en direct, avec la profondeur d'historique réelle de chaque symbole.
+    """
+    try:
+        client = open_client()
+        rows = client.catalog(category)
+    except LseDataError as exc:
+        typer.echo(f"Erreur London Strategic Edge : {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if search:
+        needle = search.lower()
+        rows = [
+            r
+            for r in rows
+            if needle in str(r.get("symbol", "")).lower()
+            or needle in str(r.get("name", "")).lower()
+        ]
+    if not rows:
+        typer.echo("Aucun instrument ne correspond.")
+        return
+    for row in rows[:limit]:
+        typer.echo(
+            f"{row.get('symbol', '')!s:<16} {row.get('category', '')!s:<14} "
+            f"{str(row.get('first', ''))[:10]} → {str(row.get('last', ''))[:10]}  "
+            f"{row.get('ticks') or '?'} ticks  {row.get('name', '')}"
+        )
+    if len(rows) > limit:
+        typer.echo(f"… {len(rows) - limit} autres (augmenter --limit)")
+
+
+@data_app.command("download")
+def data_download(  # noqa: PLR0913, PLR0917 — chaque paramètre est une décision explicite requise
+    symbol: Annotated[str, typer.Argument(help="Symbole chez le fournisseur, ex. 'EUR/USD'.")],
+    instrument_symbol: Annotated[
+        str, typer.Option("--instrument", help="Instrument EdgeLab, ex. 'EURUSD'.")
+    ],
+    timeframe: Annotated[str, typer.Option("--timeframe", help="1m, 5m, 1h, 1d…")],
+    start: Annotated[str, typer.Option("--start", help="Début UTC (ISO-8601).")],
+    end: Annotated[str, typer.Option("--end", help="Fin UTC (ISO-8601).")],
+    research_end: Annotated[
+        str, typer.Option("--research-end", help="Fin du split research (exclue, ISO-8601).")
+    ],
+    validation_end: Annotated[
+        str, typer.Option("--validation-end", help="Fin du split validation (exclue, ISO-8601).")
+    ],
+    bulk: Annotated[
+        bool,
+        typer.Option("--bulk", help="Passer par l'export Parquet du vault plutôt que l'API JSON."),
+    ] = False,
+    catalog_path: CatalogPathOption = DEFAULT_DATASET_CATALOG,
+    bars_dir: BarsDirOption = DEFAULT_BARS_DIR,
+    download_dir: Annotated[
+        Path, typer.Option("--download-dir", help="Où déposer les Parquet bruts (--bulk).")
+    ] = DEFAULT_DOWNLOAD_DIR,
+) -> None:
+    """Télécharge des barres LSE, les contrôle, et les ingère dans le store.
+
+    Les bornes de partition n'ont volontairement pas de défaut : où s'arrête la
+    recherche et où commence le holdout est la décision qui protège l'utilisateur
+    de lui-même (I3), pas un détail de confort.
+    """
+    try:
+        instrument = find_instrument(instrument_symbol)
+        partition = DatasetPartition(
+            research_end=_parse_utc(research_end), validation_end=_parse_utc(validation_end)
+        )
+        window_start, window_end = _parse_utc(start), _parse_utc(end)
+        client = open_client()
+    except (KeyError, ValueError, LseDataError) as exc:
+        typer.echo(f"Erreur : {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    with _open_store(catalog_path, bars_dir) as store:
+        try:
+            if bulk:
+                manifest = ingest_lse_export(
+                    client,
+                    symbol,
+                    timeframe=timeframe,
+                    start=window_start,
+                    end=window_end,
+                    instrument=instrument,
+                    partition=partition,
+                    store=store,
+                    download_dir=download_dir,
+                )
+            else:
+                manifest = ingest_lse_candles(
+                    client,
+                    symbol,
+                    timeframe=timeframe,
+                    start=window_start,
+                    end=window_end,
+                    instrument=instrument,
+                    partition=partition,
+                    store=store,
+                )
+        except (LseDataError, ValueError) as exc:
+            typer.echo(f"Téléchargement échoué : {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        counts = describe_splits(store, manifest.dataset_id)
+
+    typer.echo(f"dataset_id      {manifest.dataset_id}")
+    typer.echo(f"instrument      {manifest.instrument_symbol}  ({manifest.source})")
+    typer.echo(f"période         {manifest.start:%Y-%m-%d %H:%M} → {manifest.end:%Y-%m-%d %H:%M}")
+    typer.echo(f"statut          {manifest.status.value}")
+    typer.echo(f"intégrité       {manifest.integrity_report.summary()}")
+    typer.echo(
+        "splits          " + "  ".join(f"{split.value}={counts[split]}" for split in DataSplit)
+    )
+    if manifest.status is DatasetStatus.QUARANTINE:
+        typer.echo("\nCe dataset est en QUARANTAINE : le moteur de backtest le refusera.", err=True)
+        raise typer.Exit(code=2)
+
+
+@data_app.command("list")
+def data_list(
+    instrument_symbol: Annotated[
+        str | None, typer.Option("--instrument", help="Filtrer sur un instrument.")
+    ] = None,
+    catalog_path: CatalogPathOption = DEFAULT_DATASET_CATALOG,
+    bars_dir: BarsDirOption = DEFAULT_BARS_DIR,
+) -> None:
+    """Liste les datasets ingérés localement, du plus récent au plus ancien."""
+    with _open_store(catalog_path, bars_dir) as store:
+        manifests = store.list_manifests(instrument_symbol=instrument_symbol)
+    if not manifests:
+        typer.echo("Aucun dataset ingéré.")
+        return
+    for manifest in manifests:
+        typer.echo(
+            f"{manifest.dataset_id[:12]}  {manifest.instrument_symbol:<8} "
+            f"{manifest.status.value:<10} {manifest.start:%Y-%m-%d} → {manifest.end:%Y-%m-%d}  "
+            f"{manifest.source}"
+        )
+
+
+@data_app.command("show")
+def data_show(
+    dataset_id: Annotated[str, typer.Argument(help="Identifiant du dataset.")],
+    catalog_path: CatalogPathOption = DEFAULT_DATASET_CATALOG,
+    bars_dir: BarsDirOption = DEFAULT_BARS_DIR,
+) -> None:
+    """Affiche le manifeste complet, le rapport d'intégrité et la taille de chaque split."""
+    with _open_store(catalog_path, bars_dir) as store:
+        manifest = store.load_manifest(dataset_id)
+        if manifest is None:
+            typer.echo(f"Dataset introuvable : {dataset_id}", err=True)
+            raise typer.Exit(code=1)
+        counts = describe_splits(store, dataset_id)
+    typer.echo(manifest.model_dump_json(indent=2))
+    typer.echo("")
+    for split in DataSplit:
+        bounds = split_bounds(manifest, split)
+        typer.echo(
+            f"{split.value:<11} {counts[split]:>8} barres  "
+            f"{bounds.start:%Y-%m-%d %H:%M} → {bounds.end:%Y-%m-%d %H:%M}"
+        )
+
+
+@data_app.command("holdout")
+def data_holdout(  # noqa: PLR0913, PLR0917 — chaque paramètre est une décision explicite requise (I3)
+    dataset_id: Annotated[str, typer.Argument(help="Identifiant du dataset.")],
+    strategy_id: Annotated[str, typer.Option("--strategy-id", help="Stratégie qui ouvre.")],
+    reason: Annotated[str, typer.Option("--reason", help="Raison écrite, obligatoire (I3).")],
+    catalog_path: CatalogPathOption = DEFAULT_DATASET_CATALOG,
+    bars_dir: BarsDirOption = DEFAULT_BARS_DIR,
+    lockbox_path: Annotated[
+        Path, typer.Option("--lockbox-path", help="Journal d'accès holdout.")
+    ] = DEFAULT_LOCKBOX_DB,
+) -> None:
+    """Ouvre le holdout d'un dataset. L'accès est permanent, compté, et jamais annulable (I3)."""
+    with _open_store(catalog_path, bars_dir) as store, HoldoutLockbox(lockbox_path) as lockbox:
+        try:
+            selection = load_holdout(
+                store, dataset_id, strategy_id=strategy_id, reason=reason, lockbox=lockbox
+            )
+        except (UnknownDatasetError, HoldoutAccessDeniedError) as exc:
+            typer.echo(f"Accès refusé : {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except (QuarantinedDatasetError, EmptySplitError) as exc:
+            typer.echo(
+                f"Accès consommé mais dataset inutilisable : {exc}\n"
+                f"Compteur d'accès de '{strategy_id}' : {lockbox.access_count(strategy_id)}",
+                err=True,
+            )
+            raise typer.Exit(code=2) from exc
+        count = lockbox.access_count(strategy_id)
+        flagged = lockbox.is_flagged(strategy_id)
+
+    typer.echo(f"Holdout ouvert : {selection.n_bars} barres, {selection.instrument_symbol}")
+    typer.echo(f"Accès holdout de '{strategy_id}' : {count}")
+    if flagged:
+        typer.echo(
+            f"DRAPEAU ROUGE : {count} accès au holdout (seuil {RED_FLAG_THRESHOLD}). "
+            "Chaque accès supplémentaire rend toute significativité mesurée sur ce "
+            "holdout moins crédible.",
+            err=True,
+        )

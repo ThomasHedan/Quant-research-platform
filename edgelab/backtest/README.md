@@ -21,3 +21,5 @@
 **Ce module refuse de faire.** Exposer une API retournant des barres futures. Résoudre une barre ambiguë (high touche stop, low touche TP) par un choix implicite favorable. Remplir un ordre marché à la clôture de la barre qui a servi à décider.
 
 **Statut.** Phase 3 livrée : `models.py`, `market_view.py`, `fills.py`, `sizing.py`, `engine.py`.
+
+**Complément — sélection des données (I3 par construction).** `BacktestEngine` n'accepte plus un `Mapping[str, pl.DataFrame]` mais un `Mapping[str, DatasetSelection]` (voir `edgelab/data/README.md`). Conséquence directe : un dataset en quarantaine et un holdout non journalisé ne peuvent plus atteindre le moteur, non parce que le moteur les vérifie, mais parce qu'aucun objet les représentant ne peut être construit. Le moteur exige de plus que toutes les sélections d'un même run portent **le même split** — mélanger des barres de recherche et de holdout dans un backtest n'est jamais une intention réelle. `engine.dataset_ids` et `engine.dataset_hashes` exposent la lignée à écrire au registre (I1).

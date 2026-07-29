@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +11,12 @@ import numpy as np
 import pytest
 from edgelab.api import store
 from edgelab.api.main import app
+from edgelab.data.lse import LseDataError
 from edgelab.registry.models import Trial
 from edgelab.registry.repository import TrialRepository
 from fastapi.testclient import TestClient
+
+from tests.test_data_lse import FakeLseClient
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +26,9 @@ def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     monkeypatch.setattr(store, "DEFAULT_REGISTRY_DB", tmp_path / "registry.sqlite3")
     monkeypatch.setattr(store, "DEFAULT_LOCKBOX_DB", tmp_path / "lockbox.sqlite3")
     monkeypatch.setattr(store, "DEFAULT_PAPERS_DB", tmp_path / "papers.sqlite3")
+    monkeypatch.setattr(store, "DEFAULT_DATASET_CATALOG", tmp_path / "catalog.duckdb")
+    monkeypatch.setattr(store, "DEFAULT_BARS_DIR", tmp_path / "bars")
+    monkeypatch.setattr(store, "DEFAULT_DOWNLOAD_DIR", tmp_path / "downloads")
     store._load_all_bundles.cache_clear()
     yield
     store._load_all_bundles.cache_clear()
@@ -373,5 +380,176 @@ def test_update_paper_status_mort_without_reason_400s(
 def test_update_paper_status_404s_for_an_unknown_paper(client: TestClient) -> None:
     """Changer le statut d'un papier inconnu renvoie 404."""
     response = client.patch("/api/papers/does-not-exist/status", json={"status": "en_test"})
+
+    assert response.status_code == 404
+
+
+# --- Données de marché --------------------------------------------------------
+
+
+@pytest.fixture
+def vault_rows(make_clean_bars: Callable[..., Any], eurusd: Any) -> list[dict[str, Any]]:
+    """Les lignes qu'un vault LSE renverrait pour vingt jours d'EURUSD horaire propre."""
+    bars = make_clean_bars(
+        eurusd,
+        start=datetime(2024, 1, 1, tzinfo=UTC),
+        end=datetime(2024, 1, 21, tzinfo=UTC),
+        frequency=timedelta(hours=1),
+    )
+    return [
+        {
+            "timestamp": row["timestamp"].isoformat().replace("+00:00", "Z"),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": row["volume"],
+        }
+        for row in bars.iter_rows(named=True)
+    ]
+
+
+def _download_payload() -> dict[str, Any]:
+    return {
+        "provider_symbol": "EUR/USD",
+        "instrument_symbol": "EURUSD",
+        "timeframe": "1h",
+        "start": datetime(2024, 1, 1, tzinfo=UTC).isoformat(),
+        "end": datetime(2024, 1, 21, tzinfo=UTC).isoformat(),
+        "research_end": datetime(2024, 1, 13, tzinfo=UTC).isoformat(),
+        "validation_end": datetime(2024, 1, 17, tzinfo=UTC).isoformat(),
+    }
+
+
+def test_list_datasets_is_empty_before_any_download(client: TestClient) -> None:
+    """Un store vierge renvoie une liste vide, pas une erreur."""
+    assert client.get("/api/datasets").json() == []
+
+
+def test_provider_catalog_reports_a_missing_key_as_service_unavailable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sans clé API, le catalogue répond 503 avec le message actionnable du module data."""
+
+    def _raise(*_a: object, **_k: object) -> None:
+        raise LseDataError("clé API London Strategic Edge manquante : renseigner LSE_API_KEY")
+
+    monkeypatch.setattr(store, "open_client", _raise)
+
+    response = client.get("/api/provider/catalog")
+
+    assert response.status_code == 503
+    assert "LSE_API_KEY" in response.json()["detail"]
+
+
+def test_provider_catalog_filters_on_the_search_term(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`search` filtre sur le symbole comme sur le nom, sans que l'API n'invente de règle."""
+    rows = [
+        {"symbol": "EUR/USD", "name": "Euro", "category": "Forex", "dataset": "fx"},
+        {"symbol": "BTC/USD", "name": "Bitcoin", "category": "Crypto", "dataset": "crypto"},
+    ]
+    monkeypatch.setattr(store, "open_client", lambda *_a, **_k: FakeLseClient(catalog_rows=rows))
+
+    response = client.get("/api/provider/catalog", params={"search": "bitcoin"})
+
+    assert [row["symbol"] for row in response.json()] == ["BTC/USD"]
+
+
+def test_download_ingests_a_dataset_and_reports_its_splits(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, vault_rows: list[dict[str, Any]]
+) -> None:
+    """Un téléchargement crée un dataset dont les trois splits sont décrits dans la réponse."""
+    monkeypatch.setattr(store, "open_client", lambda *_a, **_k: FakeLseClient([vault_rows]))
+
+    response = client.post("/api/provider/download", json=_download_payload())
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["quarantined"] is False
+    assert [s["split"] for s in body["dataset"]["splits"]] == [
+        "research",
+        "validation",
+        "holdout",
+    ]
+    assert all(s["n_bars"] > 0 for s in body["dataset"]["splits"])
+
+
+def test_download_rejects_an_unknown_instrument(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, vault_rows: list[dict[str, Any]]
+) -> None:
+    """Un instrument absent des univers livrés est refusé en 422."""
+    monkeypatch.setattr(store, "open_client", lambda *_a, **_k: FakeLseClient([vault_rows]))
+    payload = _download_payload() | {"instrument_symbol": "DOGECOIN"}
+
+    response = client.post("/api/provider/download", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_get_dataset_returns_the_full_integrity_report(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, vault_rows: list[dict[str, Any]]
+) -> None:
+    """Le détail d'un dataset expose le rapport d'intégrité, pas seulement son résumé."""
+    monkeypatch.setattr(store, "open_client", lambda *_a, **_k: FakeLseClient([vault_rows]))
+    dataset_id = client.post("/api/provider/download", json=_download_payload()).json()["dataset"][
+        "dataset_id"
+    ]
+
+    response = client.get(f"/api/datasets/{dataset_id}")
+
+    assert response.status_code == 200
+    assert "issues" in response.json()["integrity_report"]
+
+
+def test_get_dataset_reports_an_unknown_id_as_not_found(client: TestClient) -> None:
+    """Un `dataset_id` inconnu répond 404."""
+    assert client.get("/api/datasets/n-existe-pas").status_code == 404
+
+
+def test_open_holdout_requires_a_written_reason(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, vault_rows: list[dict[str, Any]]
+) -> None:
+    """I3 tient aussi depuis l'UI : sans raison écrite, 422 et rien n'est compté."""
+    monkeypatch.setattr(store, "open_client", lambda *_a, **_k: FakeLseClient([vault_rows]))
+    dataset_id = client.post("/api/provider/download", json=_download_payload()).json()["dataset"][
+        "dataset_id"
+    ]
+
+    response = client.post(
+        "/api/datasets/holdout",
+        json={"dataset_id": dataset_id, "strategy_id": "s1", "reason": "  "},
+    )
+
+    assert response.status_code == 422
+    assert store.holdout_access_count("s1") == 0
+
+
+def test_open_holdout_counts_the_access_permanently(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, vault_rows: list[dict[str, Any]]
+) -> None:
+    """Chaque ouverture depuis l'UI incrémente le compteur permanent de la stratégie."""
+    monkeypatch.setattr(store, "open_client", lambda *_a, **_k: FakeLseClient([vault_rows]))
+    dataset_id = client.post("/api/provider/download", json=_download_payload()).json()["dataset"][
+        "dataset_id"
+    ]
+
+    body = client.post(
+        "/api/datasets/holdout",
+        json={"dataset_id": dataset_id, "strategy_id": "s1", "reason": "validation finale"},
+    ).json()
+
+    assert body["access_count"] == 1
+    assert body["flagged"] is False
+    assert body["n_bars"] > 0
+
+
+def test_open_holdout_reports_an_unknown_dataset_as_not_found(client: TestClient) -> None:
+    """Ouvrir le holdout d'un dataset inexistant répond 404."""
+    response = client.post(
+        "/api/datasets/holdout",
+        json={"dataset_id": "n-existe-pas", "strategy_id": "s1", "reason": "test"},
+    )
 
     assert response.status_code == 404

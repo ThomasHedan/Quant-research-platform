@@ -10,6 +10,7 @@ from edgelab.universe.universe import (
     INDEX_FUTURES,
     UNIVERSES,
     Universe,
+    find_instrument,
     get_universe,
 )
 
@@ -24,5 +25,6 @@ __all__ = [
     "SessionCalendar",
     "SessionWindow",
     "Universe",
+    "find_instrument",
     "get_universe",
 ]

@@ -15,7 +15,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
 from edgelab.api import store
-from edgelab.api.schemas import LeaderboardRow, StrategyBundle, TrialLink
+from edgelab.api.schemas import (
+    DatasetDetail,
+    DatasetSummary,
+    DownloadRequest,
+    DownloadResult,
+    HoldoutRequest,
+    HoldoutResult,
+    LeaderboardRow,
+    ProviderInstrument,
+    StrategyBundle,
+    TrialLink,
+)
+from edgelab.data.lockbox import HoldoutAccessDeniedError
+from edgelab.data.lse import LseDataError
+from edgelab.data.manifest import QuarantinedDatasetError
+from edgelab.data.selection import EmptySplitError, UnknownDatasetError
 from edgelab.papers.models import HypothesisDraftRequest, PaperAnalysisRequest, TriageStatus
 from edgelab.papers.repository import PaperNotFoundError, PaperRecord, PaperRepositoryError
 from edgelab.portfolio.models import AllocationSearchResult, CombinationResult, CorrelationMatrix
@@ -242,3 +257,67 @@ def update_paper_status(paper_id: str, body: PaperStatusUpdate) -> PaperRecord:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PaperRepositoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# --- Données de marché --------------------------------------------------------
+
+
+@app.get("/api/datasets", response_model=list[DatasetSummary])
+def list_datasets() -> list[DatasetSummary]:
+    """Les datasets ingérés localement. Les datasets en quarantaine sont inclus, jamais masqués."""
+    return store.list_datasets()
+
+
+@app.get("/api/datasets/{dataset_id}", response_model=DatasetDetail)
+def get_dataset(dataset_id: str) -> DatasetDetail:
+    """Détail d'un dataset, rapport d'intégrité complet inclus."""
+    try:
+        return store.get_dataset(dataset_id)
+    except UnknownDatasetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/instruments")
+def list_instruments() -> list[dict[str, str]]:
+    """Les instruments d'EdgeLab pouvant recevoir un dataset (univers `broad_12`)."""
+    return store.list_instruments()
+
+
+@app.get("/api/provider/catalog", response_model=list[ProviderInstrument])
+def provider_catalog(
+    category: str | None = None, search: str | None = None
+) -> list[ProviderInstrument]:
+    """Catalogue London Strategic Edge (déclencheur de job : exige `LSE_API_KEY`)."""
+    try:
+        return store.run_provider_catalog(category, search)
+    except LseDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/provider/download", response_model=DownloadResult)
+def download_dataset(request: DownloadRequest) -> DownloadResult:
+    """Télécharge, contrôle et ingère un instrument (déclencheur de job).
+
+    Un dataset mis en quarantaine renvoie tout de même 200 avec
+    `quarantined: true` : il a bien été créé et reste consultable pour
+    diagnostic, c'est le backtester qui le refusera.
+    """
+    try:
+        return store.run_download(request)
+    except LseDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/datasets/holdout", response_model=HoldoutResult)
+def open_holdout(request: HoldoutRequest) -> HoldoutResult:
+    """Ouvre le holdout d'un dataset (I3) : raison écrite obligatoire, accès compté à vie."""
+    try:
+        return store.run_holdout(request)
+    except UnknownDatasetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HoldoutAccessDeniedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (QuarantinedDatasetError, EmptySplitError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

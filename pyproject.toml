@@ -18,6 +18,9 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+lse = ["lse-data>=0.14"]
+
 [project.scripts]
 edgelab = "edgelab.cli:app"
 
@@ -68,6 +71,13 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 exclude = ["^web/"]
+
+# `lse-data` est une dépendance optionnelle (extra `lse`) : le type-check doit
+# passer que le SDK soit installé ou non. EdgeLab ne dépend de toute façon que
+# du protocole `LseClient`, jamais des types concrets du SDK.
+[[tool.mypy.overrides]]
+module = ["lse.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 addopts = "--cov=edgelab --cov-report=term-missing --cov-branch"

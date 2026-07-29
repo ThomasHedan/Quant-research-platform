@@ -13,14 +13,16 @@ import random
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import polars as pl
 import pytest
 from edgelab.costs.models import CostModel, FixedSpreadCost, SlippageByOrderType
-from edgelab.data.lockbox import HoldoutLockbox
-from edgelab.data.manifest import DatasetPartition
+from edgelab.data.integrity import IntegrityReport
+from edgelab.data.lockbox import HoldoutAccessRecord, HoldoutLockbox
+from edgelab.data.manifest import DatasetManifest, DatasetPartition, DatasetStatus
+from edgelab.data.selection import DatasetSelection, DataSplit
 from edgelab.data.store import DatasetStore
 from edgelab.papers.models import HypothesisDraftRequest, KillCriterionInput, PaperAnalysisRequest
 from edgelab.papers.repository import PaperRepository
@@ -204,6 +206,86 @@ def make_bar_frame() -> Callable[..., pl.DataFrame]:
             rows.append((start + timedelta(hours=i), open_, high, low, close, 100.0))
         return pl.DataFrame(
             rows, schema=["timestamp", "open", "high", "low", "close", "volume"], orient="row"
+        )
+
+    return _make
+
+
+@pytest.fixture
+def wrap_selection() -> Callable[..., DatasetSelection]:
+    """Factory emballant des barres déjà construites dans une `DatasetSelection`.
+
+    Le moteur de backtest n'accepte plus de DataFrame nu : passer par une
+    sélection est ce qui prouve que la quarantaine a été vérifiée et que le
+    holdout, le cas échéant, a été journalisé (I3). Les bornes de partition
+    sont calées pour que toutes les barres tombent dans le split demandé.
+    """
+
+    def _make(
+        bars: pl.DataFrame,
+        *,
+        split: DataSplit = DataSplit.RESEARCH,
+        instrument_symbol: str = "EURUSD",
+        status: DatasetStatus = DatasetStatus.OK,
+    ) -> DatasetSelection:
+        start = cast(datetime, bars["timestamp"].min())
+        end = cast(datetime, bars["timestamp"].max())
+        far_past = start - timedelta(days=1)
+        far_future = end + timedelta(days=1)
+        match split:
+            case DataSplit.RESEARCH:
+                partition = DatasetPartition(
+                    research_end=far_future, validation_end=far_future + timedelta(days=1)
+                )
+            case DataSplit.VALIDATION:
+                partition = DatasetPartition(research_end=far_past, validation_end=far_future)
+            case DataSplit.HOLDOUT:
+                partition = DatasetPartition(
+                    research_end=far_past, validation_end=far_past + timedelta(hours=1)
+                )
+        manifest = DatasetManifest(
+            dataset_id=f"ds-{instrument_symbol}-{split.value}",
+            instrument_symbol=instrument_symbol,
+            source="synthetic",
+            start=start,
+            end=end,
+            timezone="UTC",
+            roll_method=None,
+            partition=partition,
+            integrity_report=IntegrityReport(issues=()),
+            status=status,
+            manifest_hash="0" * 64,
+        )
+        access = (
+            HoldoutAccessRecord(strategy_id="test", reason="fixture", accessed_at=datetime.now(UTC))
+            if split is DataSplit.HOLDOUT
+            else None
+        )
+        return DatasetSelection(manifest=manifest, split=split, bars=bars, holdout_access=access)
+
+    return _make
+
+
+@pytest.fixture
+def make_selection(
+    make_bar_frame: Callable[..., pl.DataFrame],
+    wrap_selection: Callable[..., DatasetSelection],
+) -> Callable[..., DatasetSelection]:
+    """Factory produisant une `DatasetSelection` à partir d'une liste de clôtures."""
+
+    def _make(
+        closes: list[float],
+        *,
+        split: DataSplit = DataSplit.RESEARCH,
+        instrument_symbol: str = "EURUSD",
+        status: DatasetStatus = DatasetStatus.OK,
+        **bar_kwargs: object,
+    ) -> DatasetSelection:
+        return wrap_selection(
+            make_bar_frame(closes, **bar_kwargs),
+            split=split,
+            instrument_symbol=instrument_symbol,
+            status=status,
         )
 
     return _make

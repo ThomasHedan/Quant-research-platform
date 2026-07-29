@@ -10,6 +10,7 @@ from edgelab.backtest.engine import BacktestEngine
 from edgelab.backtest.market_view import LookAheadError
 from edgelab.backtest.models import ExitReason, OrderSide
 from edgelab.costs.models import CostModel, FixedSpreadCost, OrderType, SlippageByOrderType
+from edgelab.data.selection import DatasetSelection, DataSplit
 from edgelab.universe import Instrument
 
 
@@ -112,32 +113,32 @@ def commission_instrument(
 
 
 def test_engine_rejects_empty_bars(zero_commission_instrument: Instrument) -> None:
-    """Un backtest sans aucune barre n'a rien à rejouer."""
-    with pytest.raises(ValueError, match="bars_by_instrument"):
+    """Un backtest sans aucune sélection n'a rien à rejouer."""
+    with pytest.raises(ValueError, match="selections must not be empty"):
         BacktestEngine({}, {}, initial_capital=100_000.0)
 
 
 def test_engine_rejects_symbol_mismatch(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Les instruments fournis doivent couvrir exactement les mêmes symboles que les barres."""
     with pytest.raises(ValueError, match="same symbols"):
         BacktestEngine(
-            {"EURUSD": make_bar_frame([100.0, 101.0])},
+            {"EURUSD": make_selection([100.0, 101.0])},
             {"GBPUSD": zero_commission_instrument},
             initial_capital=100_000.0,
         )
 
 
 def test_engine_rejects_misaligned_bar_counts(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Tous les instruments doivent partager le même calendrier de barres (même longueur)."""
     with pytest.raises(ValueError, match="aligned timeline"):
         BacktestEngine(
             {
-                "EURUSD": make_bar_frame([100.0, 101.0, 102.0]),
-                "GBPUSD": make_bar_frame([100.0, 101.0]),
+                "EURUSD": make_selection([100.0, 101.0, 102.0]),
+                "GBPUSD": make_selection([100.0, 101.0]),
             },
             {"EURUSD": zero_commission_instrument, "GBPUSD": zero_commission_instrument},
             initial_capital=100_000.0,
@@ -145,34 +146,32 @@ def test_engine_rejects_misaligned_bar_counts(
 
 
 def test_engine_rejects_non_positive_initial_capital(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Un capital initial nul ou négatif n'a pas de sens."""
     with pytest.raises(ValueError, match="initial_capital"):
         BacktestEngine(
-            {"EURUSD": make_bar_frame([100.0])},
+            {"EURUSD": make_selection([100.0])},
             {"EURUSD": zero_commission_instrument},
             initial_capital=0.0,
         )
 
 
-def test_engine_rejects_an_empty_bar_series(
+def test_engine_rejects_mixed_splits(
     zero_commission_instrument: Instrument,
+    make_selection: Callable[..., DatasetSelection],
 ) -> None:
-    """Une série de barres vide n'a rien à rejouer, même si les clés correspondent."""
-    empty = pl.DataFrame(
-        schema={
-            "timestamp": pl.Datetime,
-            "open": pl.Float64,
-            "high": pl.Float64,
-            "low": pl.Float64,
-            "close": pl.Float64,
-            "volume": pl.Float64,
-        }
-    )
-    with pytest.raises(ValueError, match="must not be empty"):
+    """Mélanger research et holdout dans un même backtest n'est jamais une intention réelle."""
+    with pytest.raises(ValueError, match="must share one split"):
         BacktestEngine(
-            {"EURUSD": empty}, {"EURUSD": zero_commission_instrument}, initial_capital=100_000.0
+            {
+                "EURUSD": make_selection([100.0, 101.0], split=DataSplit.RESEARCH),
+                "GBPUSD": make_selection(
+                    [100.0, 101.0], split=DataSplit.HOLDOUT, instrument_symbol="GBPUSD"
+                ),
+            },
+            {"EURUSD": zero_commission_instrument, "GBPUSD": zero_commission_instrument},
+            initial_capital=100_000.0,
         )
 
 
@@ -180,11 +179,11 @@ def test_engine_rejects_an_empty_bar_series(
 
 
 def test_enter_rejects_neither_quantity_nor_risk_pct(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Il faut fournir un mode de dimensionnement, l'un ou l'autre."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -195,11 +194,11 @@ def test_enter_rejects_neither_quantity_nor_risk_pct(
 
 
 def test_enter_rejects_both_quantity_and_risk_pct(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Fournir les deux modes de dimensionnement à la fois est ambigu."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -210,11 +209,11 @@ def test_enter_rejects_both_quantity_and_risk_pct(
 
 
 def test_enter_risk_pct_requires_stop_loss_price(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Le dimensionnement par risque a besoin d'une distance de stop pour se calculer."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -225,11 +224,11 @@ def test_enter_risk_pct_requires_stop_loss_price(
 
 
 def test_enter_rejects_non_positive_quantity(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Une quantité nulle ou négative n'a pas de sens."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -240,11 +239,11 @@ def test_enter_rejects_non_positive_quantity(
 
 
 def test_enter_limit_order_requires_limit_price(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Un ordre limite sans prix limite ne peut pas se remplir."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -255,11 +254,11 @@ def test_enter_limit_order_requires_limit_price(
 
 
 def test_enter_stop_order_requires_stop_price(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Un ordre stop sans prix de déclenchement ne peut pas se remplir."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -270,18 +269,18 @@ def test_enter_stop_order_requires_stop_price(
 
 
 def test_enter_is_a_no_op_when_a_position_is_already_open(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Une seule position à la fois par instrument : une seconde demande d'entrée est ignorée."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 100.0, 100.0])},
+        {"EURUSD": make_selection([100.0, 100.0, 100.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
     engine.run(BuyAndHold("EURUSD"))
     # BuyAndHold n'entre qu'une fois par construction ; ce test vérifie l'appel direct idempotent
     engine2 = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 100.0, 100.0])},
+        {"EURUSD": make_selection([100.0, 100.0, 100.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -296,11 +295,11 @@ def test_enter_is_a_no_op_when_a_position_is_already_open(
 
 
 def test_exit_is_a_no_op_without_an_open_position(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Demander la clôture d'un instrument sans position ouverte ne fait rien."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -312,11 +311,11 @@ def test_exit_is_a_no_op_without_an_open_position(
 
 
 def test_enter_with_risk_pct_derives_quantity_from_stop_distance(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Le dimensionnement par risque dérive la quantité de la distance au stop."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 100.0])},
+        {"EURUSD": make_selection([100.0, 100.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -334,6 +333,7 @@ def test_enter_with_risk_pct_derives_quantity_from_stop_distance(
 
 def test_limit_entry_stays_pending_until_touched(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Un ordre limite qui n'est jamais touché reste en attente, sans jamais se remplir."""
     rows = [
@@ -368,7 +368,9 @@ def test_limit_entry_stays_pending_until_touched(
                 self._done = True
 
     engine = BacktestEngine(
-        {"EURUSD": bars}, {"EURUSD": zero_commission_instrument}, initial_capital=100_000.0
+        {"EURUSD": wrap_selection(bars)},
+        {"EURUSD": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
     result = engine.run(LimitBuyer())
 
@@ -378,6 +380,7 @@ def test_limit_entry_stays_pending_until_touched(
 
 def test_stop_entry_order_fills_when_triggered(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Un ordre stop d'entrée se remplit dès que le range de la barre atteint son niveau."""
     rows = [
@@ -412,7 +415,9 @@ def test_stop_entry_order_fills_when_triggered(
                 self._done = True
 
     engine = BacktestEngine(
-        {"EURUSD": bars}, {"EURUSD": zero_commission_instrument}, initial_capital=100_000.0
+        {"EURUSD": wrap_selection(bars)},
+        {"EURUSD": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
     result = engine.run(StopBuyer())
 
@@ -424,11 +429,11 @@ def test_stop_entry_order_fills_when_triggered(
 
 
 def test_a_cheating_strategy_that_reads_a_future_bar_raises_look_ahead_error(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Critère d'acceptation (I4) : le moteur propage l'erreur d'une stratégie qui triche."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0, 102.0])},
+        {"EURUSD": make_selection([100.0, 101.0, 102.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -443,7 +448,7 @@ def test_a_cheating_strategy_that_reads_a_future_bar_raises_look_ahead_error(
 def test_buy_and_hold_reproduces_instrument_return_minus_costs_to_the_cent(
     commission_instrument: Instrument,
     commission_cost_model: CostModel,
-    make_bar_frame: Callable[..., pl.DataFrame],
+    make_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Critère d'acceptation Phase 3 : buy-and-hold == rendement de l'instrument moins les coûts.
 
@@ -455,11 +460,12 @@ def test_buy_and_hold_reproduces_instrument_return_minus_costs_to_the_cent(
     closes = [100.0]
     for r in rng.normal(0.0002, 0.001, 60):
         closes.append(closes[-1] * (1 + r))
-    bars = make_bar_frame(closes)
+    selection = make_selection(closes)
+    bars = selection.bars
     capital = 100_000.0
 
     engine = BacktestEngine(
-        {"EURUSD": bars}, {"EURUSD": commission_instrument}, initial_capital=capital
+        {"EURUSD": selection}, {"EURUSD": commission_instrument}, initial_capital=capital
     )
     result = engine.run(BuyAndHold("EURUSD"))
 
@@ -480,16 +486,19 @@ def test_buy_and_hold_reproduces_instrument_return_minus_costs_to_the_cent(
 
 
 def test_zero_edge_strategy_produces_a_net_pnl_exactly_equal_to_cumulative_costs(
-    commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    commission_instrument: Instrument,
+    make_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Critère d'acceptation Phase 3 : PnL net strictement négatif, égal aux coûts cumulés.
 
     Un prix strictement plat rend le PnL brut de chaque aller-retour nul par
     construction : la seule dégradation possible est le coût.
     """
-    flat_bars = make_bar_frame([100.0] * 30)
+    flat_bars = make_selection([100.0] * 30)
     engine = BacktestEngine(
-        {"FLAT": flat_bars}, {"FLAT": commission_instrument}, initial_capital=100_000.0
+        {"FLAT": flat_bars},
+        {"FLAT": commission_instrument},
+        initial_capital=100_000.0,
     )
 
     result = engine.run(AlwaysFlip("FLAT", 1_000.0))
@@ -507,6 +516,7 @@ def test_zero_edge_strategy_produces_a_net_pnl_exactly_equal_to_cumulative_costs
 
 def test_ambiguous_bar_resolves_to_stop_loss_first(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Politique déclarée (CLAUDE.md §7) : si le stop et le take-profit sont tous deux touchés,
     le stop l'emporte — jamais un choix implicite favorable au trade."""
@@ -527,7 +537,9 @@ def test_ambiguous_bar_resolves_to_stop_loss_first(
         rows, schema=["timestamp", "open", "high", "low", "close", "volume"], orient="row"
     )
     engine = BacktestEngine(
-        {"AMB": bars}, {"AMB": zero_commission_instrument}, initial_capital=100_000.0
+        {"AMB": wrap_selection(bars)},
+        {"AMB": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
 
     result = engine.run(EnterOnceWithBracket("AMB", stop_loss_price=95.0, take_profit_price=105.0))
@@ -537,7 +549,10 @@ def test_ambiguous_bar_resolves_to_stop_loss_first(
     assert result.trades[0].exit_price_filled == 95.0
 
 
-def test_take_profit_alone_closes_the_position(zero_commission_instrument: Instrument) -> None:
+def test_take_profit_alone_closes_the_position(
+    zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
+) -> None:
     """Sans ambiguïté, un take-profit seul touché clôture bien la position en take-profit."""
     rows = [
         (datetime(2024, 1, 1, tzinfo=UTC), 100.0, 100.0, 100.0, 100.0, 100.0),
@@ -556,7 +571,7 @@ def test_take_profit_alone_closes_the_position(zero_commission_instrument: Instr
         rows, schema=["timestamp", "open", "high", "low", "close", "volume"], orient="row"
     )
     engine = BacktestEngine(
-        {"TP": bars}, {"TP": zero_commission_instrument}, initial_capital=100_000.0
+        {"TP": wrap_selection(bars)}, {"TP": zero_commission_instrument}, initial_capital=100_000.0
     )
 
     result = engine.run(EnterOnceWithBracket("TP", stop_loss_price=95.0, take_profit_price=105.0))
@@ -567,6 +582,7 @@ def test_take_profit_alone_closes_the_position(zero_commission_instrument: Instr
 
 def test_a_quiet_bar_between_entry_and_trigger_leaves_the_bracket_open(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Une barre qui ne touche ni le stop ni le take-profit laisse la position ouverte."""
     rows = [
@@ -579,7 +595,9 @@ def test_a_quiet_bar_between_entry_and_trigger_leaves_the_bracket_open(
         rows, schema=["timestamp", "open", "high", "low", "close", "volume"], orient="row"
     )
     engine = BacktestEngine(
-        {"QUIET": bars}, {"QUIET": zero_commission_instrument}, initial_capital=100_000.0
+        {"QUIET": wrap_selection(bars)},
+        {"QUIET": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
 
     result = engine.run(
@@ -592,6 +610,7 @@ def test_a_quiet_bar_between_entry_and_trigger_leaves_the_bracket_open(
 
 def test_bracket_exit_takes_precedence_over_a_pending_signal_exit(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Un stop déclenché la même barre l'emporte sur une sortie signal demandée plus tôt."""
     rows = [
@@ -618,7 +637,9 @@ def test_bracket_exit_takes_precedence_over_a_pending_signal_exit(
                 engine.exit(self.symbol)
 
     engine = BacktestEngine(
-        {"PRIO": bars}, {"PRIO": zero_commission_instrument}, initial_capital=100_000.0
+        {"PRIO": wrap_selection(bars)},
+        {"PRIO": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
     result = engine.run(
         EnterThenSignalExitOnBar2("PRIO", stop_loss_price=95.0, take_profit_price=200.0)
@@ -633,6 +654,7 @@ def test_bracket_exit_takes_precedence_over_a_pending_signal_exit(
 
 def test_mae_and_mfe_track_the_worst_and_best_excursion_after_entry(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """MAE/MFE capturent la pire perte latente et le meilleur gain latent, barre par barre.
 
@@ -658,7 +680,9 @@ def test_mae_and_mfe_track_the_worst_and_best_excursion_after_entry(
                 engine.exit(self.symbol)
 
     engine = BacktestEngine(
-        {"MAE": bars}, {"MAE": zero_commission_instrument}, initial_capital=100_000.0
+        {"MAE": wrap_selection(bars)},
+        {"MAE": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
     result = engine.run(EnterThenExitOnBar3("MAE"))
 
@@ -670,6 +694,7 @@ def test_mae_and_mfe_track_the_worst_and_best_excursion_after_entry(
 
 def test_mae_and_mfe_are_mirrored_for_a_short_position(
     zero_commission_instrument: Instrument,
+    wrap_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Pour un short, l'excursion défavorable est une hausse du prix, la favorable une baisse."""
     rows = [
@@ -695,7 +720,9 @@ def test_mae_and_mfe_are_mirrored_for_a_short_position(
                 engine.exit(self.symbol)
 
     engine = BacktestEngine(
-        {"SHORT": bars}, {"SHORT": zero_commission_instrument}, initial_capital=100_000.0
+        {"SHORT": wrap_selection(bars)},
+        {"SHORT": zero_commission_instrument},
+        initial_capital=100_000.0,
     )
     result = engine.run(EnterShortThenExitOnBar3("SHORT"))
 
@@ -710,11 +737,11 @@ def test_mae_and_mfe_are_mirrored_for_a_short_position(
 
 def test_multi_instrument_backtest_shares_a_single_capital_pool(
     zero_commission_instrument: Instrument,
-    make_bar_frame: Callable[..., pl.DataFrame],
+    make_selection: Callable[..., DatasetSelection],
 ) -> None:
     """Deux instruments simultanés puisent dans le même capital, sans compartimentage."""
-    bars_a = make_bar_frame([100.0] * 10)
-    bars_b = make_bar_frame([50.0] * 10)
+    bars_a = make_selection([100.0] * 10)
+    bars_b = make_selection([50.0] * 10, instrument_symbol="B")
     instrument_b = Instrument(
         symbol="B",
         name="B",
@@ -747,11 +774,11 @@ def test_multi_instrument_backtest_shares_a_single_capital_pool(
 
 def test_exposure_reflects_both_open_positions_notional_value(
     zero_commission_instrument: Instrument,
-    make_bar_frame: Callable[..., pl.DataFrame],
+    make_selection: Callable[..., DatasetSelection],
 ) -> None:
     """L'exposition agrégée est la somme des valeurs notionnelles des positions ouvertes."""
-    bars_a = make_bar_frame([100.0] * 5)
-    bars_b = make_bar_frame([50.0] * 5)
+    bars_a = make_selection([100.0] * 5)
+    bars_b = make_selection([50.0] * 5, instrument_symbol="B")
     instrument_b = Instrument(
         symbol="B",
         name="B",
@@ -788,11 +815,11 @@ def test_exposure_reflects_both_open_positions_notional_value(
 
 
 def test_position_returns_none_before_any_entry(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """Sans ordre soumis, aucune position n'est ouverte."""
     engine = BacktestEngine(
-        {"EURUSD": make_bar_frame([100.0, 101.0])},
+        {"EURUSD": make_selection([100.0, 101.0])},
         {"EURUSD": zero_commission_instrument},
         initial_capital=100_000.0,
     )
@@ -803,14 +830,14 @@ def test_position_returns_none_before_any_entry(
 
 
 def test_equity_curve_has_one_point_per_bar(
-    zero_commission_instrument: Instrument, make_bar_frame: Callable[..., pl.DataFrame]
+    zero_commission_instrument: Instrument, make_selection: Callable[..., DatasetSelection]
 ) -> None:
     """La courbe d'équité a exactement une valeur par barre traitée."""
-    bars = make_bar_frame([100.0, 101.0, 102.0, 103.0])
+    selection = make_selection([100.0, 101.0, 102.0, 103.0])
     engine = BacktestEngine(
-        {"EURUSD": bars}, {"EURUSD": zero_commission_instrument}, initial_capital=100_000.0
+        {"EURUSD": selection}, {"EURUSD": zero_commission_instrument}, initial_capital=100_000.0
     )
 
     result = engine.run(DoNothing())
 
-    assert len(result.equity_curve) == bars.height
+    assert len(result.equity_curve) == selection.n_bars

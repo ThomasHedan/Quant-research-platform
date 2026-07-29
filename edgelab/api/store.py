@@ -28,9 +28,38 @@ from pathlib import Path
 
 import numpy as np
 
-from edgelab.api.schemas import LeaderboardRow, StrategyBundle
-from edgelab.config import DEFAULT_LOCKBOX_DB, DEFAULT_PAPERS_DB, DEFAULT_REGISTRY_DB
+from edgelab.api.schemas import (
+    DatasetDetail,
+    DatasetSummary,
+    DownloadRequest,
+    DownloadResult,
+    HoldoutRequest,
+    HoldoutResult,
+    LeaderboardRow,
+    ProviderInstrument,
+    SplitSummary,
+    StrategyBundle,
+)
+from edgelab.config import (
+    DEFAULT_BARS_DIR,
+    DEFAULT_DATASET_CATALOG,
+    DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_LOCKBOX_DB,
+    DEFAULT_PAPERS_DB,
+    DEFAULT_REGISTRY_DB,
+)
+from edgelab.data.ingest import ingest_lse_candles, ingest_lse_export
 from edgelab.data.lockbox import HoldoutLockbox
+from edgelab.data.lse import open_client
+from edgelab.data.manifest import DatasetManifest, DatasetPartition, DatasetStatus
+from edgelab.data.selection import (
+    DataSplit,
+    UnknownDatasetError,
+    describe_splits,
+    load_holdout,
+    split_bounds,
+)
+from edgelab.data.store import DatasetStore
 from edgelab.papers.models import HypothesisDraftRequest, PaperAnalysisRequest, TriageStatus
 from edgelab.papers.prompts import PAPER_ANALYSIS_PROMPT, hypothesis_draft_prompt_for
 from edgelab.papers.repository import (
@@ -48,10 +77,14 @@ from edgelab.propsim.risk_surface import sweep_risk_surface
 from edgelab.propsim.simulator import DEFAULT_BLOCK_SIZE
 from edgelab.registry.models import Trial
 from edgelab.registry.repository import TrialRepository
+from edgelab.universe import BROAD_12, find_instrument
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_BARS_DIR",
+    "DEFAULT_DATASET_CATALOG",
+    "DEFAULT_DOWNLOAD_DIR",
     "DEFAULT_LOCKBOX_DB",
     "DEFAULT_PAPERS_DB",
     "DEFAULT_REGISTRY_DB",
@@ -59,23 +92,31 @@ __all__ = [
     "PaperNotFoundError",
     "PaperRepositoryError",
     "StrategyNotFoundError",
+    "UnknownDatasetError",
     "attach_paper_hypothesis",
     "create_paper",
     "get_bundle",
+    "get_dataset",
     "get_paper",
     "get_ruleset",
     "holdout_access_count",
     "leaderboard_rows",
     "list_bundles",
+    "list_datasets",
+    "list_instruments",
     "list_papers",
     "list_rulesets",
+    "open_dataset_store",
     "paper_analysis_prompt",
     "paper_hypothesis_prompt",
     "registry_trial_count",
     "registry_trials",
     "run_combination",
     "run_correlation",
+    "run_download",
+    "run_holdout",
     "run_optimize_allocation",
+    "run_provider_catalog",
     "run_risk_surface",
     "set_paper_status",
 ]
@@ -409,3 +450,187 @@ def _write_bundle(bundle: StrategyBundle) -> None:
     path = SEED_DATA_DIR / f"{bundle.strategy_id}.json"
     path.write_text(json.dumps(bundle.model_dump(mode="json"), indent=2, ensure_ascii=False))
     _load_all_bundles.cache_clear()
+
+
+# --- Données de marché (Phase 1 bis) -----------------------------------------
+#
+# `open_dataset_store` ouvre le vrai store DuckDB+Parquet produit par le CLI.
+# `run_provider_catalog` et `run_download` sont des déclencheurs de job au sens
+# du README de l'API : ils délèguent entièrement à `edgelab.data`, ne décident
+# rien et ne dupliquent aucun calcul. `run_holdout` fait de même vers le lockbox,
+# et hérite donc de I3 sans le réimplémenter.
+
+
+def open_dataset_store() -> DatasetStore:
+    """Ouvre le store de datasets. L'appelant est responsable de le fermer."""
+    return DatasetStore(DEFAULT_DATASET_CATALOG, DEFAULT_BARS_DIR)
+
+
+def _summarise(manifest: DatasetManifest, counts: dict[DataSplit, int]) -> DatasetSummary:
+    splits = tuple(
+        SplitSummary(
+            split=split,
+            start=(bounds := split_bounds(manifest, split)).start,
+            end=bounds.end,
+            n_bars=counts[split],
+        )
+        for split in DataSplit
+    )
+    return DatasetSummary(
+        dataset_id=manifest.dataset_id,
+        instrument_symbol=manifest.instrument_symbol,
+        source=manifest.source,
+        status=manifest.status,
+        start=manifest.start,
+        end=manifest.end,
+        timezone=manifest.timezone,
+        roll_method=manifest.roll_method,
+        manifest_hash=manifest.manifest_hash,
+        created_at=manifest.created_at,
+        n_bars=sum(counts.values()),
+        splits=splits,
+        integrity_summary=manifest.integrity_report.summary(),
+        is_clean=manifest.integrity_report.is_clean,
+    )
+
+
+def list_datasets() -> list[DatasetSummary]:
+    """Tous les datasets ingérés localement, du plus récent au plus ancien.
+
+    Les datasets en quarantaine sont renvoyés comme les autres : ce sont eux
+    qu'il faut voir, pas eux qu'il faut cacher.
+    """
+    with open_dataset_store() as store:
+        return [
+            _summarise(manifest, describe_splits(store, manifest.dataset_id))
+            for manifest in store.list_manifests()
+        ]
+
+
+def get_dataset(dataset_id: str) -> DatasetDetail:
+    """Le détail d'un dataset, rapport d'intégrité complet inclus.
+
+    Raises:
+        UnknownDatasetError: si `dataset_id` n'est pas dans le store.
+    """
+    with open_dataset_store() as store:
+        manifest = store.load_manifest(dataset_id)
+        if manifest is None:
+            raise UnknownDatasetError(f"dataset '{dataset_id}' introuvable dans le store")
+        counts = describe_splits(store, dataset_id)
+    return DatasetDetail(
+        summary=_summarise(manifest, counts), integrity_report=manifest.integrity_report
+    )
+
+
+def list_instruments() -> list[dict[str, str]]:
+    """Les instruments livrés par `edgelab.universe`, pour le sélecteur de l'UI.
+
+    La liste vit dans le package, jamais en dur dans le frontend : un
+    instrument ajouté à `broad_12` apparaît dans l'UI sans toucher au web.
+    """
+    return [
+        {
+            "symbol": instrument.symbol,
+            "name": instrument.name,
+            "asset_class": instrument.asset_class.value,
+        }
+        for instrument in BROAD_12.instruments
+    ]
+
+
+def run_provider_catalog(
+    category: str | None = None, search: str | None = None
+) -> list[ProviderInstrument]:
+    """Interroge le catalogue London Strategic Edge (déclencheur de job, exige la clé API).
+
+    Raises:
+        LseDataError: si le SDK n'est pas installé ou la clé absente.
+    """
+    rows = open_client().catalog(category)
+    instruments = [
+        ProviderInstrument(
+            symbol=str(row.get("symbol", "")),
+            name=str(row.get("name") or ""),
+            category=str(row.get("category", "")),
+            dataset=str(row.get("dataset", "")),
+            first=None if row.get("first") is None else str(row["first"]),
+            last=None if row.get("last") is None else str(row["last"]),
+            ticks=None if row.get("ticks") is None else int(row["ticks"]),
+        )
+        for row in rows
+    ]
+    if not search:
+        return instruments
+    needle = search.lower()
+    return [i for i in instruments if needle in i.symbol.lower() or needle in i.name.lower()]
+
+
+def run_download(request: DownloadRequest) -> DownloadResult:
+    """Télécharge, contrôle et ingère un instrument LSE (déclencheur de job).
+
+    Raises:
+        KeyError: si `instrument_symbol` n'est pas un instrument livré.
+        ValueError: si les bornes de partition ou la résolution sont invalides.
+        LseDataError: si le fournisseur est injoignable ou la clé absente.
+    """
+    instrument = find_instrument(request.instrument_symbol)
+    partition = DatasetPartition(
+        research_end=request.research_end, validation_end=request.validation_end
+    )
+    client = open_client()
+    with open_dataset_store() as store:
+        if request.bulk:
+            manifest = ingest_lse_export(
+                client,
+                request.provider_symbol,
+                timeframe=request.timeframe,
+                start=request.start,
+                end=request.end,
+                instrument=instrument,
+                partition=partition,
+                store=store,
+                download_dir=DEFAULT_DOWNLOAD_DIR,
+            )
+        else:
+            manifest = ingest_lse_candles(
+                client,
+                request.provider_symbol,
+                timeframe=request.timeframe,
+                start=request.start,
+                end=request.end,
+                instrument=instrument,
+                partition=partition,
+                store=store,
+            )
+        counts = describe_splits(store, manifest.dataset_id)
+    return DownloadResult(
+        dataset=_summarise(manifest, counts),
+        quarantined=manifest.status is DatasetStatus.QUARANTINE,
+    )
+
+
+def run_holdout(request: HoldoutRequest) -> HoldoutResult:
+    """Ouvre le holdout d'un dataset depuis l'UI — tracé et compté comme depuis le CLI (I3).
+
+    Raises:
+        UnknownDatasetError: si le dataset n'existe pas.
+        HoldoutAccessDeniedError: si la raison est vide.
+        QuarantinedDatasetError: si le dataset est en quarantaine.
+        EmptySplitError: si le holdout ne contient aucune barre.
+    """
+    with open_dataset_store() as store, HoldoutLockbox(DEFAULT_LOCKBOX_DB) as lockbox:
+        selection = load_holdout(
+            store,
+            request.dataset_id,
+            strategy_id=request.strategy_id,
+            reason=request.reason,
+            lockbox=lockbox,
+        )
+        return HoldoutResult(
+            dataset_id=request.dataset_id,
+            strategy_id=request.strategy_id,
+            n_bars=selection.n_bars,
+            access_count=lockbox.access_count(request.strategy_id),
+            flagged=lockbox.is_flagged(request.strategy_id),
+        )

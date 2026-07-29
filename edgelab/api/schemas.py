@@ -10,8 +10,13 @@ bundle de stratégie pour la fiche UI, et la ligne dense du leaderboard.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict
 
+from edgelab.data.integrity import IntegrityReport
+from edgelab.data.manifest import DatasetStatus, RollMethod
+from edgelab.data.selection import DataSplit
 from edgelab.propsim.models import PropSimComparison, RiskSurfaceResult
 from edgelab.strategies.models import HypothesisSheet, StrategyStatus
 from edgelab.validation.models import (
@@ -159,3 +164,97 @@ class StrategyBundle(BaseModel):
     ruleset_name: str
     holdout_access_count: int
     holdout_flagged: bool
+
+
+class SplitSummary(BaseModel):
+    """Un split d'un dataset : ses bornes et le nombre de barres qu'il contient."""
+
+    split: DataSplit
+    start: datetime
+    end: datetime
+    n_bars: int
+
+
+class DatasetSummary(BaseModel):
+    """Vue de liste d'un dataset ingéré. Le statut de quarantaine est de premier ordre."""
+
+    dataset_id: str
+    instrument_symbol: str
+    source: str
+    status: DatasetStatus
+    start: datetime
+    end: datetime
+    timezone: str
+    roll_method: RollMethod | None
+    manifest_hash: str
+    created_at: datetime
+    n_bars: int
+    splits: tuple[SplitSummary, ...]
+    integrity_summary: str
+    is_clean: bool
+
+
+class DatasetDetail(BaseModel):
+    """Vue détaillée d'un dataset : son résumé plus le rapport d'intégrité complet."""
+
+    summary: DatasetSummary
+    integrity_report: IntegrityReport
+
+
+class ProviderInstrument(BaseModel):
+    """Une ligne du catalogue London Strategic Edge.
+
+    `first`/`last` sont laissés en chaîne : ce sont des valeurs du fournisseur,
+    dont le format n'a pas été vérifié contre un serveur réel, et les afficher
+    telles quelles vaut mieux que de les reformater sur une hypothèse.
+    """
+
+    symbol: str
+    name: str
+    category: str
+    dataset: str
+    first: str | None
+    last: str | None
+    ticks: int | None
+
+
+class DownloadRequest(BaseModel):
+    """Demande de téléchargement d'un instrument LSE vers le store local.
+
+    Les bornes de partition n'ont pas de valeur par défaut côté modèle : l'UI
+    en propose une, mais c'est l'utilisateur qui la confirme (I3).
+    """
+
+    provider_symbol: str
+    instrument_symbol: str
+    timeframe: str
+    start: datetime
+    end: datetime
+    research_end: datetime
+    validation_end: datetime
+    bulk: bool = False
+
+
+class DownloadResult(BaseModel):
+    """Résultat d'un téléchargement : le dataset créé et son verdict d'intégrité."""
+
+    dataset: DatasetSummary
+    quarantined: bool
+
+
+class HoldoutRequest(BaseModel):
+    """Ouverture du holdout depuis l'UI. `reason` est obligatoire et non vide (I3)."""
+
+    dataset_id: str
+    strategy_id: str
+    reason: str
+
+
+class HoldoutResult(BaseModel):
+    """Compte rendu d'une ouverture du holdout — le compteur est permanent."""
+
+    dataset_id: str
+    strategy_id: str
+    n_bars: int
+    access_count: int
+    flagged: bool

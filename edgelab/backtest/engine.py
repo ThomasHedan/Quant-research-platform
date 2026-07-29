@@ -27,8 +27,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-import polars as pl
-
 from edgelab.backtest.fills import fill_limit_order, fill_market_order, fill_stop_order
 from edgelab.backtest.market_view import MarketView
 from edgelab.backtest.models import (
@@ -41,6 +39,7 @@ from edgelab.backtest.models import (
 )
 from edgelab.backtest.sizing import position_size_fixed_risk
 from edgelab.costs.models import OrderType
+from edgelab.data.selection import DatasetSelection
 from edgelab.universe.instrument import Instrument
 
 _EXIT_ORDER_TYPE_BY_REASON = {
@@ -75,34 +74,47 @@ class BacktestEngine:
 
     def __init__(
         self,
-        bars_by_instrument: Mapping[str, pl.DataFrame],
+        selections: Mapping[str, DatasetSelection],
         instruments: Mapping[str, Instrument],
         *,
         initial_capital: float,
     ) -> None:
         """
+        `selections` et non des DataFrames nus : c'est ce qui rend I3 et le refus
+        des datasets en quarantaine structurels plutôt que disciplinaires. Une
+        `DatasetSelection` ne peut pas exister sans avoir passé
+        `ensure_backtest_ready`, et sa variante holdout ne peut pas exister sans
+        un accès journalisé (voir `edgelab.data.selection`).
+
         Raises:
-            ValueError: si `bars_by_instrument` est vide ou ne contient que des
-                séries de barres vides, si ses clés ne correspondent pas
-                exactement à celles de `instruments`, si les séries de barres
+            ValueError: si `selections` est vide, si ses clés ne correspondent
+                pas exactement à celles de `instruments`, si toutes les
+                sélections ne portent pas le même split, si les séries de barres
                 n'ont pas toutes la même longueur (calendrier aligné requis),
                 ou si `initial_capital` n'est pas positif.
         """
-        if not bars_by_instrument:
-            raise ValueError("bars_by_instrument must not be empty")
-        if set(bars_by_instrument) != set(instruments):
-            raise ValueError("bars_by_instrument and instruments must cover the same symbols")
+        if not selections:
+            raise ValueError("selections must not be empty")
+        if set(selections) != set(instruments):
+            raise ValueError("selections and instruments must cover the same symbols")
+        splits = {selection.split for selection in selections.values()}
+        if len(splits) != 1:
+            raise ValueError(
+                f"all selections must share one split, got {sorted(s.value for s in splits)} — "
+                "mixing research and holdout bars in one backtest is never intended"
+            )
+        bars_by_instrument = {symbol: sel.bars for symbol, sel in selections.items()}
         lengths = {df.height for df in bars_by_instrument.values()}
         if len(lengths) != 1:
             raise ValueError(
                 "all instruments must share the same number of bars (aligned timeline)"
             )
-        if lengths == {0}:
-            raise ValueError("bar series must not be empty")
         if initial_capital <= 0.0:
             raise ValueError("initial_capital must be positive")
 
         self._instruments = dict(instruments)
+        self._selections = dict(selections)
+        self.split = splits.pop()
         self.market = MarketView(bars_by_instrument)
         self.initial_capital = initial_capital
         self._n_bars = lengths.pop()
@@ -111,6 +123,16 @@ class BacktestEngine:
         self._pending_exits: dict[str, float] = {}
         self._open_positions: dict[str, OpenPosition] = {}
         self._trades: list[TradeRecord] = []
+
+    @property
+    def dataset_ids(self) -> dict[str, str]:
+        """Le `dataset_id` utilisé par instrument — la lignée à écrire au registre (I1)."""
+        return {symbol: sel.manifest.dataset_id for symbol, sel in self._selections.items()}
+
+    @property
+    def dataset_hashes(self) -> dict[str, str]:
+        """Le `manifest_hash` utilisé par instrument, pour le hash de lignée d'un essai (I1)."""
+        return {symbol: sel.manifest.manifest_hash for symbol, sel in self._selections.items()}
 
     # --- API consommée par les stratégies -----------------------------------
 

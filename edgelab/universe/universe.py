@@ -249,3 +249,20 @@ def get_universe(name: str) -> Universe:
     except KeyError as exc:
         available = ", ".join(sorted(UNIVERSES))
         raise KeyError(f"unknown universe '{name}' (available: {available})") from exc
+
+
+def find_instrument(symbol: str) -> Instrument:
+    """L'instrument `symbol`, cherché dans `broad_12` qui couvre tous les univers livrés.
+
+    Sert aux frontières (CLI, API) où l'utilisateur nomme un instrument sans
+    nommer d'univers. Le cœur du code, lui, reçoit toujours un `Instrument`
+    déjà résolu.
+
+    Raises:
+        KeyError: si aucun instrument livré ne porte ce symbole.
+    """
+    try:
+        return BROAD_12.get(symbol)
+    except KeyError as exc:
+        available = ", ".join(BROAD_12.symbols)
+        raise KeyError(f"instrument '{symbol}' inconnu ; disponibles : {available}") from exc

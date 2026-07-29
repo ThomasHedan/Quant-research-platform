@@ -14,6 +14,7 @@ build/
 
 # EdgeLab data & artifacts (never commit market data, registry DB, or run artifacts)
 /data/
+/.edgelab/
 *.duckdb
 *.sqlite
 *.sqlite3

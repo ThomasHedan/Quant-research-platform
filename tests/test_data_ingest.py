@@ -15,11 +15,15 @@ from edgelab.data.ingest import (
     ingest_csv,
     ingest_dukascopy_day,
     ingest_futures_continuous,
+    ingest_lse_candles,
+    ingest_lse_export,
     ingest_parquet,
 )
 from edgelab.data.manifest import DatasetPartition, DatasetStatus, RollMethod, ensure_backtest_ready
 from edgelab.data.store import DatasetStore
 from edgelab.universe.instrument import Instrument
+
+from tests.test_data_lse import FakeLseClient
 
 FREQUENCY = timedelta(minutes=1)
 START = datetime(2024, 1, 8, 0, 0, tzinfo=UTC)  # lundi
@@ -270,3 +274,127 @@ def test_ingest_dukascopy_day_fetches_aggregates_and_ingests(
 
     assert manifest.source == "dukascopy"
     assert manifest.status is DatasetStatus.OK
+
+
+# --- London Strategic Edge ---------------------------------------------------
+
+
+def _vault_rows(bars: pl.DataFrame) -> list[dict[str, object]]:
+    """Les lignes JSON que le vault renverrait pour ces barres."""
+    return [
+        {
+            "timestamp": row["timestamp"].isoformat().replace("+00:00", "Z"),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": row["volume"],
+        }
+        for row in bars.iter_rows(named=True)
+    ]
+
+
+def test_ingest_lse_candles_runs_the_same_integrity_gate_as_every_other_source(
+    eurusd: Instrument,
+    dataset_store: DatasetStore,
+    make_partition: Callable[..., DatasetPartition],
+    make_clean_bars: Callable[..., pl.DataFrame],
+) -> None:
+    """Une ingestion LSE produit un manifeste contrôlé, comme un CSV ou du Dukascopy."""
+    bars = make_clean_bars(eurusd, start=START, end=END, frequency=FREQUENCY)
+    client = FakeLseClient([_vault_rows(bars)])
+    partition = make_partition(START + timedelta(hours=12), START + timedelta(hours=18))
+
+    manifest = ingest_lse_candles(
+        client,
+        "EUR/USD",
+        timeframe="1m",
+        start=START,
+        end=END,
+        instrument=eurusd,
+        partition=partition,
+        store=dataset_store,
+    )
+
+    assert manifest.source == "lse:EUR/USD:1m"
+    assert manifest.status is DatasetStatus.OK
+    ensure_backtest_ready(manifest)
+
+
+def test_ingest_lse_candles_quarantines_a_session_gap(
+    eurusd: Instrument,
+    dataset_store: DatasetStore,
+    make_partition: Callable[..., DatasetPartition],
+    make_clean_bars: Callable[..., pl.DataFrame],
+) -> None:
+    """Le fournisseur n'est pas cru sur parole : un trou reçu de LSE part en quarantaine."""
+    bars = make_clean_bars(eurusd, start=START, end=END, frequency=FREQUENCY)
+    holed = pl.concat([bars[:100], bars[200:]])
+    client = FakeLseClient([_vault_rows(holed)])
+    partition = make_partition(START + timedelta(hours=12), START + timedelta(hours=18))
+
+    manifest = ingest_lse_candles(
+        client,
+        "EUR/USD",
+        timeframe="1m",
+        start=START,
+        end=END,
+        instrument=eurusd,
+        partition=partition,
+        store=dataset_store,
+    )
+
+    assert manifest.status is DatasetStatus.QUARANTINE
+
+
+def test_ingest_lse_candles_rejects_an_unknown_timeframe(
+    eurusd: Instrument,
+    dataset_store: DatasetStore,
+    make_partition: Callable[..., DatasetPartition],
+) -> None:
+    """Une résolution inconnue est refusée avant tout appel réseau."""
+    client = FakeLseClient()
+
+    with pytest.raises(ValueError, match="timeframe '2m' inconnu"):
+        ingest_lse_candles(
+            client,
+            "EUR/USD",
+            timeframe="2m",
+            start=START,
+            end=END,
+            instrument=eurusd,
+            partition=make_partition(START + timedelta(hours=12), START + timedelta(hours=18)),
+            store=dataset_store,
+        )
+
+    assert client.calls == []
+
+
+def test_ingest_lse_export_ingests_the_downloaded_parquet(
+    tmp_path: Path,
+    eurusd: Instrument,
+    dataset_store: DatasetStore,
+    make_partition: Callable[..., DatasetPartition],
+    make_clean_bars: Callable[..., pl.DataFrame],
+) -> None:
+    """Le chemin bulk lit le Parquet construit par le vault et l'ingère comme le reste."""
+    bars = make_clean_bars(eurusd, start=START, end=END, frequency=FREQUENCY)
+    artifact = tmp_path / "vault_export.parquet"
+    bars.write_parquet(artifact)
+    client = FakeLseClient(export_path=artifact)
+    partition = make_partition(START + timedelta(hours=12), START + timedelta(hours=18))
+
+    manifest = ingest_lse_export(
+        client,
+        "EUR/USD",
+        timeframe="1m",
+        start=START,
+        end=END,
+        instrument=eurusd,
+        partition=partition,
+        store=dataset_store,
+        download_dir=tmp_path / "downloads",
+    )
+
+    assert manifest.source == "lse-export:EUR/USD:1m"
+    assert dataset_store.load_bars(manifest.dataset_id).height == bars.height

@@ -21,6 +21,13 @@ import polars as pl
 from edgelab.data.dukascopy import Fetcher, aggregate_ticks_to_bars, fetch_day_ticks
 from edgelab.data.futures import FuturesContract, splice_continuous_future
 from edgelab.data.integrity import run_integrity_checks
+from edgelab.data.lse import (
+    TIMEFRAMES,
+    LseClient,
+    download_history,
+    fetch_candles,
+    load_history_parquet,
+)
 from edgelab.data.manifest import (
     DatasetManifest,
     DatasetPartition,
@@ -197,6 +204,97 @@ def ingest_dukascopy_day(  # noqa: PLR0913 — chaque paramètre est une décisi
         bars,
         instrument=instrument,
         source="dukascopy",
+        frequency=frequency,
+        partition=partition,
+        store=store,
+        roll_method=None,
+    )
+
+
+def _lse_frequency(timeframe: str) -> timedelta:
+    if timeframe not in TIMEFRAMES:
+        raise ValueError(f"timeframe '{timeframe}' inconnu ; attendu l'un de {sorted(TIMEFRAMES)}")
+    return TIMEFRAMES[timeframe]
+
+
+def ingest_lse_candles(  # noqa: PLR0913 — chaque paramètre est une décision explicite requise
+    client: LseClient,
+    symbol: str,
+    *,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    instrument: Instrument,
+    partition: DatasetPartition,
+    store: DatasetStore,
+    dataset: str | None = None,
+) -> DatasetManifest:
+    """Récupère des barres London Strategic Edge par l'API JSON paginée, puis les ingère.
+
+    Chemin interactif : pratique jusqu'à quelques dizaines de milliers de barres,
+    au-delà `ingest_lse_export` évite de marteler l'API avec des pages de 5 000
+    lignes. La `frequency` du contrôle d'intégrité est dérivée du `timeframe`
+    demandé, jamais devinée à partir des données reçues — sinon un dataset
+    troué se validerait lui-même en faisant passer ses trous pour son pas.
+
+    Raises:
+        ValueError: si `timeframe` n'est pas une résolution du vault, ou si la
+            plage demandée ne renvoie aucune barre.
+    """
+    frequency = _lse_frequency(timeframe)
+    bars = fetch_candles(client, symbol, timeframe=timeframe, start=start, end=end, dataset=dataset)
+    return ingest_bars(
+        bars,
+        instrument=instrument,
+        source=f"lse:{symbol}:{timeframe}",
+        frequency=frequency,
+        partition=partition,
+        store=store,
+        roll_method=None,
+    )
+
+
+def ingest_lse_export(  # noqa: PLR0913 — chaque paramètre est une décision explicite requise
+    client: LseClient,
+    symbol: str,
+    *,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    instrument: Instrument,
+    partition: DatasetPartition,
+    store: DatasetStore,
+    download_dir: Path,
+    dataset: str | None = None,
+) -> DatasetManifest:
+    """Déclenche un export Parquet du vault, télécharge le fichier, puis l'ingère.
+
+    Le Parquet téléchargé est conservé sur disque : il est l'artefact brut du
+    fournisseur, alors que le store d'EdgeLab contient la version normalisée et
+    contrôlée. Garder les deux permet de rejouer une ingestion sans reconsommer
+    de quota.
+
+    Raises:
+        ValueError: si `timeframe` n'est pas une résolution du vault.
+        LseDataError: si l'export ne produit aucun fichier lisible.
+    """
+    frequency = _lse_frequency(timeframe)
+    path = download_history(
+        client,
+        symbol,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        dest=download_dir,
+        dataset=dataset,
+    )
+    bars = load_history_parquet(path).filter(
+        pl.col("timestamp").is_between(start, end, closed="both")
+    )
+    return ingest_bars(
+        bars,
+        instrument=instrument,
+        source=f"lse-export:{symbol}:{timeframe}",
         frequency=frequency,
         partition=partition,
         store=store,

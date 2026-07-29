@@ -346,3 +346,77 @@ export interface PaperRecord {
 export interface PromptResponse {
   prompt: string
 }
+
+export type DataSplit = "research" | "validation" | "holdout"
+export type DatasetStatus = "ok" | "quarantine"
+export type RollMethod = "ratio" | "difference" | "none"
+
+export interface SplitSummary {
+  split: DataSplit
+  start: string
+  end: string
+  n_bars: number
+}
+
+export interface DatasetSummary {
+  dataset_id: string
+  instrument_symbol: string
+  source: string
+  status: DatasetStatus
+  start: string
+  end: string
+  timezone: string
+  roll_method: RollMethod | null
+  manifest_hash: string
+  created_at: string
+  n_bars: number
+  splits: SplitSummary[]
+  integrity_summary: string
+  is_clean: boolean
+}
+
+export interface IntegrityIssue {
+  kind: string
+  severity: "critical" | "warning"
+  message: string
+  count: number
+}
+
+export interface DatasetDetail {
+  summary: DatasetSummary
+  integrity_report: { issues: IntegrityIssue[] }
+}
+
+export interface ProviderInstrument {
+  symbol: string
+  name: string
+  category: string
+  dataset: string
+  first: string | null
+  last: string | null
+  ticks: number | null
+}
+
+export interface DownloadRequest {
+  provider_symbol: string
+  instrument_symbol: string
+  timeframe: string
+  start: string
+  end: string
+  research_end: string
+  validation_end: string
+  bulk: boolean
+}
+
+export interface DownloadResult {
+  dataset: DatasetSummary
+  quarantined: boolean
+}
+
+export interface HoldoutResult {
+  dataset_id: string
+  strategy_id: string
+  n_bars: number
+  access_count: number
+  flagged: boolean
+}
